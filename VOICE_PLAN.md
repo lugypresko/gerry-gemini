@@ -28,3 +28,7 @@ Static Assets and small stateless request handlers fit the intended setup; provi
 3. Test each Live engine: speak, hear Gerry, interrupt, and verify the transcript/context.
 4. Record a complete exchange, stop and download. Verify both speakers in the audio.
 5. Run turn, streaming, interim and two-stage modes with the same typed sentence. Export latency results; check continuation does not repeat the opening.
+
+## Deployed streaming observation, 2026-10-06
+
+Gemini 3.8 Flash TTS, input `מה בעצם הביא אותך לעבוד פה?`: reply text ready 1810 ms (server duration), first PCM chunk 1190 ms after speech request, scheduled playback 1216 ms after speech request; strategy UI reported 3104 ms to first scheduled output and 19893 ms through playback completion. Provider output was real and the UI reported no error. These values are one observation; no matched-run performance comparison or physical speaker measurement was performed. An initial test exposed buffering by latency instrumentation; a regression test now verifies streaming headers return before the body completes.
