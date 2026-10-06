@@ -1,0 +1,6 @@
+{
+  "name": "ג'רי הפודקאסטר: מעבדת Gemini Live vs GPT-Live",
+  "description": "אולפן פודקאסט בעברית עם ג'רי הבובה ואיתי, ומעבדת ניסוי להשוואת הבעה רגשית בין Gemini Live ל-GPT-Live.",
+  "requestFramePermissions": ["microphone", "autoplay", "speaker-selection"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
