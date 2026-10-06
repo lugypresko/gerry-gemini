@@ -5,6 +5,7 @@ import { BlindTestLab } from './components/BlindTestLab';
 import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { SystemPromptEditor } from './components/SystemPromptEditor';
 import { TtsComparisonLab } from './components/TtsComparisonLab';
+import { TtsProviderComparisonLab } from './components/TtsProviderComparisonLab';
 import { INITIAL_SCENARIOS } from './data/scenarios';
 import { Scenario, EvaluationScores } from './types/podcast';
 import { DEFAULT_JERRY_SYSTEM_PROMPT } from './constants/prompts';
@@ -20,7 +21,7 @@ import {
 } from 'lucide-react';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'studio' | 'tts' | 'experiment' | 'blind' | 'analytics' | 'prompt'>('studio');
+  const [activeTab, setActiveTab] = useState<'studio' | 'tts' | 'experiment' | 'blind' | 'analytics' | 'prompt' | 'tts-providers'>('studio');
   const [scenarios, setScenarios] = useState<Scenario[]>(INITIAL_SCENARIOS);
   const [systemPrompt, setSystemPrompt] = useState<string>(DEFAULT_JERRY_SYSTEM_PROMPT);
   const [selectedVoice, setSelectedVoice] = useState<string>('Puck');
@@ -87,7 +88,8 @@ export default function App() {
           <nav className="flex items-center gap-1.5 bg-slate-950 p-1.5 rounded-2xl border border-slate-800/80 overflow-x-auto max-w-full">
             {[
               { id: 'studio', label: 'אולפן חי', icon: Radio },
-              { id: 'tts', label: 'השוואת TTS (Flash vs Lite)', icon: Zap },
+              { id: 'tts', label: 'השוואת Gemini TTS', icon: Zap },
+              { id: 'tts-providers', label: 'השוואת מנועי דיבור', icon: Sparkles },
               { id: 'experiment', label: 'מעבדת הניסוי', icon: FlaskConical },
               { id: 'blind', label: 'מבחן עיוור', icon: EyeOff },
               { id: 'analytics', label: 'דשבורד וסטטיסטיקה', icon: BarChart2 },
@@ -133,6 +135,8 @@ export default function App() {
             setSelectedVoice={setSelectedVoice}
           />
         )}
+
+        {activeTab === 'tts-providers' && <TtsProviderComparisonLab />}
 
         {activeTab === 'experiment' && (
           <ExperimentLab

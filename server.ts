@@ -618,6 +618,75 @@ app.post('/api/gemini/run-scenario', async (req: Request, res: Response) => {
   }
 });
 
+
+/** Provider-neutral speech comparison endpoint. API keys remain server-side. */
+app.get('/api/voice-lab/providers', (_req: Request, res: Response) => {
+  res.json({
+    providers: [
+      { id: 'gemini-flash', label: 'Gemini 3.8 Flash TTS', configured: Boolean(apiKey) },
+      { id: 'gemini-lite', label: 'Gemini 3.8 Flash-Lite TTS', configured: Boolean(apiKey) },
+      { id: 'openai-tts-1', label: 'OpenAI TTS-1', configured: Boolean(process.env.OPENAI_API_KEY) },
+      { id: 'elevenlabs', label: 'ElevenLabs', configured: Boolean(process.env.ELEVENLABS_API_KEY && process.env.ELEVENLABS_VOICE_ID) },
+    ],
+  });
+});
+
+app.post('/api/voice-lab/speak', async (req: Request, res: Response) => {
+  const startedAt = Date.now();
+  try {
+    const { text, provider, style = 'Expressive Hebrew podcast host', voiceName = 'Puck' } = req.body;
+    if (typeof text !== 'string' || !text.trim()) return res.status(400).json({ error: 'Text is required' });
+    let audio: Buffer;
+    let mimeType = 'audio/mpeg';
+    let modelUsed = provider;
+
+    if (provider === 'gemini-flash' || provider === 'gemini-lite') {
+      if (!apiKey) return res.status(503).json({ error: 'GEMINI_API_KEY is not configured' });
+      const model = provider === 'gemini-flash' ? 'gemini-3.8-flash-tts' : 'gemini-3.8-flash-lite-tts';
+      const response = await ai.models.generateContent({
+        model,
+        contents: [{ role: 'user', parts: [{ text: text.trim(), speechMetadata: provider === 'gemini-flash' ? { speaker: 'Jerry', style } : { style } }] }],
+        config: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } } },
+      });
+      const encoded = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (!encoded) throw new Error('Gemini returned no audio');
+      audio = Buffer.from(encoded, 'base64');
+      mimeType = 'audio/wav';
+      modelUsed = model;
+    } else if (provider === 'openai-tts-1') {
+      const key = process.env.OPENAI_API_KEY;
+      if (!key) return res.status(503).json({ error: 'OPENAI_API_KEY is not configured' });
+      const response = await fetch('https://api.openai.com/v1/audio/speech', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'tts-1', input: text.trim(), voice: process.env.OPENAI_TTS_VOICE || 'alloy', response_format: 'mp3' }),
+      });
+      if (!response.ok) throw new Error(`OpenAI TTS failed (${response.status}): ${(await response.text()).slice(0, 300)}`);
+      audio = Buffer.from(await response.arrayBuffer());
+      modelUsed = 'tts-1';
+    } else if (provider === 'elevenlabs') {
+      const key = process.env.ELEVENLABS_API_KEY;
+      const voiceId = process.env.ELEVENLABS_VOICE_ID;
+      if (!key || !voiceId) return res.status(503).json({ error: 'Set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID' });
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
+        method: 'POST',
+        headers: { 'xi-api-key': key, 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
+        body: JSON.stringify({ text: text.trim(), model_id: process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2' }),
+      });
+      if (!response.ok) throw new Error(`ElevenLabs TTS failed (${response.status}): ${(await response.text()).slice(0, 300)}`);
+      audio = Buffer.from(await response.arrayBuffer());
+      modelUsed = process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
+    } else {
+      return res.status(400).json({ error: 'Unknown speech provider' });
+    }
+
+    res.json({ audioBase64: audio.toString('base64'), mimeType, modelUsed, latencyMs: Date.now() - startedAt });
+  } catch (error: any) {
+    console.error('Voice lab synthesis error:', error);
+    res.status(502).json({ error: error.message || 'Speech generation failed', latencyMs: Date.now() - startedAt });
+  }
+});
+
 // Vite middleware in dev or static files in production
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
