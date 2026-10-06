@@ -16,6 +16,22 @@ const LIVE_MODEL = 'gemini-3.8-live';
 const TTS_MODELS = ['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts'];
 const MAX_BODY = 10 * 1024 * 1024;
 class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
+export function providerFailure(error: unknown): string {
+  const e = error as { status?: number; message?: string };
+  const status = Number(e?.status);
+  const message = String(e?.message || '');
+  const category = /SERVICE_DISABLED|has not been used|is disabled/i.test(message) ? 'Generative Language API is disabled in the key project' :
+    /API_KEY_SERVICE_BLOCKED/i.test(message) ? 'key restrictions block Gemini API' :
+    /API_KEY_HTTP_REFERRER_BLOCKED/i.test(message) ? 'browser-only key cannot be used by this Worker' :
+    /API_KEY_IP_ADDRESS_BLOCKED/i.test(message) ? 'key IP restrictions block this Worker' :
+    /leaked|reported as leaked/i.test(message) ? 'key blocked by Google as leaked; replace it' :
+    /API_KEY_INVALID|API key not valid|invalid api key/i.test(message) ? 'invalid API key' :
+    /RESOURCE_EXHAUSTED|quota|billing/i.test(message) ? 'quota or billing limit' :
+    /PERMISSION_DENIED/i.test(message) ? 'permission denied' :
+    /NOT_FOUND/i.test(message) ? 'model not available' :
+    /INVALID_ARGUMENT/i.test(message) ? 'invalid request parameters' : 'provider request rejected';
+  return `Gemini: ${category}${status >= 400 && status <= 599 ? ` (HTTP ${status})` : ''}. No fallback was used.`;
+}
 function requireKey(key: string | undefined, name: string): string {
   if (!key) throw new ApiError(503, `${name} is not configured`);
   return key;
@@ -172,7 +188,7 @@ export default {
       return json(await route(path,body,env,start));
     } catch (error) {
       // SDK errors can contain URLs or request headers: never echo them or log credentials.
-      return json({error:error instanceof ApiError ? error.message : 'Provider request failed. Check model access, credentials and quota; no fallback was used.',latencyMs:Date.now()-start},error instanceof ApiError ? error.status : 502);
+      return json({error:error instanceof ApiError ? error.message : providerFailure(error),latencyMs:Date.now()-start},error instanceof ApiError ? error.status : 502);
     }
   },
 };
