@@ -3,6 +3,24 @@ import assert from 'node:assert/strict';
 import worker, { pcmToWav, providerFailure, type Env } from '../worker/index';
 const env:Env={ASSETS:{fetch:async()=>new Response('assets')}};
 const call=(path:string, body:any={}, bindings:Partial<Env>={})=>worker.fetch(new Request('http://localhost'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),{...env,...bindings});
+test('recording transcription uses Interactions and returns Hebrew text',async()=>{
+ const original=globalThis.fetch;
+ globalThis.fetch=async(input,init)=>{assert.equal(input,'https://generativelanguage.googleapis.com/v1beta/interactions');const body=JSON.parse(init!.body as string);assert.equal(body.model,'gemini-3.5-transcribe');assert.equal(body.input[0].mime_type,'audio/webm');assert.deepEqual(body.generation_config.transcription_config.language_codes,['he-IL']);return Response.json({output_text:'שלום ג׳רי'});};
+ try{const r=await call('/api/gemini/transcribe',{audioBase64:'AAAA',mimeType:'audio/webm;codecs=opus'},{GEMINI_API_KEY:'fixture'});assert.equal(r.status,200);assert.equal((await r.json() as any).transcript,'שלום ג׳רי');}finally{globalThis.fetch=original;}
+});
+test('empty transcription is an explicit failure, no invented transcript',async()=>{
+ const original=globalThis.fetch;globalThis.fetch=async()=>Response.json({outputs:[]});
+ try{const r=await call('/api/gemini/transcribe',{audioBase64:'AAAA'},{GEMINI_API_KEY:'fixture'});assert.equal(r.status,502);assert.match((await r.json() as any).error,/no text/);}finally{globalThis.fetch=original;}
+});
+test('GPT-Live SDP handshake keeps provider credentials on the server',async()=>{
+ const original=globalThis.fetch;globalThis.fetch=async(input,init)=>{assert.equal(input,'https://api.openai.com/v1/live/sessions');const body=JSON.parse(init!.body as string);assert.equal(body.session.model,'gpt-live-1');assert.equal(body.session.instructions,'Gerry persona');assert.equal(body.transport.type,'webrtc');return Response.json({session:{id:'live-fixture',secret:'never-return'},transport:{sdp:'v=0 answer'}});};
+ try{const r=await call('/api/voice-lab/openai-live',{sdp:'v=0 offer',systemPrompt:'Gerry persona'},{OPENAI_API_KEY:'fixture-key'});assert.equal(r.status,200);const data=await r.json();assert.equal((data as any).transport.sdp,'v=0 answer');assert(!JSON.stringify(data).includes('never-return'));assert(!JSON.stringify(data).includes('fixture-key'));}finally{globalThis.fetch=original;}
+});
+test('new voice endpoints report missing secrets and invalid streaming providers',async()=>{
+ assert.equal((await call('/api/voice-lab/openai-live',{sdp:'v=0 offer'})).status,503);
+ assert.equal((await call('/api/voice-lab/speak-stream',{text:'שלום',provider:'gemini-flash'})).status,503);
+ assert.equal((await call('/api/voice-lab/speak-stream',{text:'שלום',provider:'openai-tts-1'})).status,400);
+});
 test('provider keys independently configure the corresponding provider',async()=>{
  for(const [key,id] of [['OPENAI_API_KEY','openai-tts-1'],['GEMINI_API_KEY','gemini-lite'],['ELEVENLABS_API_KEY','elevenlabs']]){
  const r=await worker.fetch(new Request('http://localhost/api/voice-lab/providers'),{...env,[key]:'fixture',ELEVENLABS_VOICE_ID:'fixture-voice'});

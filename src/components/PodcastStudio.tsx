@@ -1,3 +1,4 @@
+import { RecordingControls } from './RecordingControls';
 import React, { useState, useRef, useEffect } from 'react';
 import { PuppetAvatar } from './PuppetAvatar';
 import { SoundBoardBar } from './SoundBoardBar';
@@ -52,7 +53,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
       timestamp: '00:12',
       emotion: 'neutral',
       ttsModel: 'gemini-3.8-flash-lite-tts',
-      generationTimeMs: 650,
+      generationTimeMs: undefined,
     },
   ]);
 
@@ -108,7 +109,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
         };
 
         recognition.onerror = (e: any) => {
-          console.warn('SpeechRecognition error:', e?.error);
+          setMicError(`זיהוי הדיבור בדפדפן נכשל (${e?.error || 'unknown'}). ההקלטה תתומלל בשרת כשתלחץ לסיום.`);
         };
 
         recognitionRef.current = recognition;
@@ -187,6 +188,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
       };
 
       mediaRecorderRef.current = recorder;
+      recorder.onerror = () => setMicError('הקלטת המיקרופון נכשלה. בדוק את התקן הקלט והרשאת הדפדפן.');
       recorder.start(200);
       setIsRecordingMic(true);
       audioController.playChime('record_start');
@@ -492,13 +494,14 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
         timestamp: '00:01',
         emotion: 'neutral',
         ttsModel: ttsModel,
-        generationTimeMs: 450,
+        generationTimeMs: undefined,
       },
     ]);
   };
 
   return (
     <div className="space-y-6 text-right" dir="rtl">
+      <RecordingControls transcript={messages} />
       {apiError && <p role="alert" className="rounded-xl border border-rose-700 bg-rose-950/40 p-3 text-sm text-rose-200">{apiError}</p>}
       
       {/* Sound Board & Ambient Music Bar */}

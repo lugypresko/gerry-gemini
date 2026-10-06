@@ -1,3 +1,4 @@
+import { ConversationAudio } from './conversationAudio';
 import { latency } from './latency';
 /**
  * Audio playback and speech helper for Jerry & Itay podcast.
@@ -9,6 +10,7 @@ class AudioController {
   private currentAudio: HTMLAudioElement | null = null;
   private currentSource: AudioBufferSourceNode | null = null;
   private audioCtx: AudioContext | null = null;
+  public recordingGraph: ConversationAudio | null = null;
   private isUnlocked: boolean = false;
 
   constructor() {
@@ -90,6 +92,7 @@ class AudioController {
 
       source.connect(gain);
       gain.connect(ctx.destination);
+      if(this.recordingGraph) gain.connect(this.recordingGraph.mix);
 
       source.onended = endWrapper;
       source.start(0);
@@ -109,6 +112,7 @@ class AudioController {
 
         const audio = new Audio(blobUrl);
         audio.volume = 1.0;
+        if(this.recordingGraph){const source=ctx.createMediaElementSource(audio);source.connect(ctx.destination);source.connect(this.recordingGraph.mix);}
         this.currentAudio = audio;
 
         audio.onended = () => {

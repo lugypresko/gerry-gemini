@@ -103,7 +103,7 @@ async function reply(env: Env, body: any) {
     continuation: `המשך עכשיו בתור ג׳רי, בעברית טבעית, במשפט אחד או שניים. אל תחזור על תגובת הפתיחה שכבר נאמרה: "${previous}". הוסף מחשבה או שאלה שמקדמת את השיחה.`,
   };
   const response = await gemini(env).models.generateContent({model: TEXT_MODEL, contents: [{role:'user',parts:[{text:userMessage}]}],
-    config: {systemInstruction: `${DEFAULT_JERRY_SYSTEM_PROMPT}\n${instructions[kind]}`, temperature: kind === 'opening' ? 0.6 : 0.8, thinkingConfig: {thinkingLevel: ThinkingLevel.MINIMAL}},
+    config: {systemInstruction: `${typeof body.systemPrompt === 'string' ? body.systemPrompt.slice(0,16000) : DEFAULT_JERRY_SYSTEM_PROMPT}\n${instructions[kind]}`, temperature: kind === 'opening' ? 0.6 : 0.8, thinkingConfig: {thinkingLevel: ThinkingLevel.MINIMAL}},
   });
   return response.text?.trim() || '';
 }
@@ -113,10 +113,42 @@ function providers(env: Env) {
     {id:'gemini-lite',label:'Gemini 3.8 Flash-Lite TTS',configured:Boolean(env.GEMINI_API_KEY),model:TTS_MODELS[1]},
     {id:'openai-tts-1',label:'OpenAI TTS-1',configured:Boolean(env.OPENAI_API_KEY),model:'tts-1'},
     {id:'elevenlabs',label:'ElevenLabs',configured:Boolean(env.ELEVENLABS_API_KEY && env.ELEVENLABS_VOICE_ID),model:env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2'},
-  ], live: {configured:Boolean(env.GEMINI_API_KEY),model:LIVE_MODEL}, text: {configured:Boolean(env.GEMINI_API_KEY),model:TEXT_MODEL}};
+  ], openaiLive: {configured:Boolean(env.OPENAI_API_KEY),model:'gpt-live-1'}, live: {configured:Boolean(env.GEMINI_API_KEY),model:LIVE_MODEL}, text: {configured:Boolean(env.GEMINI_API_KEY),model:TEXT_MODEL}};
 }
-const postPaths = new Set(['/api/voice-lab/speak','/api/voice-lab/reply','/api/voice-lab/live-token','/api/gemini/speak','/api/gemini/compare-tts','/api/gemini/chat','/api/gemini/transcribe','/api/gemini/run-scenario']);
+const postPaths = new Set(['/api/voice-lab/speak','/api/voice-lab/speak-stream','/api/voice-lab/openai-live','/api/voice-lab/reply','/api/voice-lab/live-token','/api/gemini/speak','/api/gemini/compare-tts','/api/gemini/chat','/api/gemini/transcribe','/api/gemini/run-scenario']);
 async function route(path: string, body: any, env: Env, start: number): Promise<any> {
+  if (path === '/api/voice-lab/openai-live') {
+    const sdp = requiredText(body.sdp,'SDP offer',65536);
+    if (!sdp.startsWith('v=0')) throw new ApiError(400,'Invalid SDP offer');
+    const systemPrompt = typeof body.systemPrompt === 'string' ? body.systemPrompt.slice(0,16000) : DEFAULT_JERRY_SYSTEM_PROMPT;
+    const response = await fetch('https://api.openai.com/v1/live/sessions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${requireKey(env.OPENAI_API_KEY,'OPENAI_API_KEY')}`},body:JSON.stringify({session:{model:'gpt-live-1',instructions:systemPrompt,delegation:{type:'responses',responses:{model:'gpt-5.6-terra',instructions:systemPrompt}}},transport:{type:'webrtc',sdp}})});
+    if (!response.ok) throw new ApiError(502,`OpenAI GPT-Live rejected session creation (HTTP ${response.status}). No fallback was used.`);
+    const data = await response.json() as any;
+    if (!data.transport?.sdp || !data.session?.id) throw new ApiError(502,'OpenAI returned no session/SDP answer');
+    return {session:{id:data.session.id},transport:{type:'webrtc',sdp:data.transport.sdp}};
+  }
+  if (path === '/api/voice-lab/speak-stream') {
+    const text = requiredText(body.text);
+    if (!['gemini-flash','gemini-lite'].includes(body.provider)) throw new ApiError(400,'Streaming currently supports Gemini 3.8 TTS only; choose a Gemini provider.');
+    const model = body.provider === 'gemini-flash' ? TTS_MODELS[0] : TTS_MODELS[1];
+    const upstream = await gemini(env).models.generateContentStream({model,contents:[{role:'user',parts:[{text}]}],config:{responseModalities:[Modality.AUDIO],speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName:body.voiceName || 'Puck'}}}}});
+    const iterator = upstream[Symbol.asyncIterator]();
+    const encoder = new TextEncoder();
+    let ended = false;
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const next = await iterator.next();
+          if (next.done) {ended=true;controller.enqueue(encoder.encode(JSON.stringify({type:'done'})+'\n'));controller.close();return;}
+          for (const part of next.value.candidates?.[0]?.content?.parts || []) {
+            if (part.inlineData?.data) controller.enqueue(encoder.encode(JSON.stringify({type:'audio',data:part.inlineData.data,mimeType:part.inlineData.mimeType || 'audio/L16;rate=24000',model})+'\n'));
+          }
+        } catch(error) {ended=true;controller.enqueue(encoder.encode(JSON.stringify({type:'error',error:providerFailure(error)})+'\n'));controller.close();}
+      },
+      async cancel() {if (!ended) await iterator.return?.(undefined);},
+    });
+    return new Response(stream,{headers:{'Content-Type':'application/x-ndjson','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
+  }
   if (path === '/api/voice-lab/speak') return speech(env, body);
   if (path === '/api/voice-lab/reply') {
     const text = await reply(env, body); const ready = Date.now();
@@ -137,16 +169,24 @@ async function route(path: string, body: any, env: Env, start: number): Promise<
     const text = body.text || 'שלום חברים! כאן ג׳רי הבובה בפודקאסט חי. תראו איך אני נשמע!';
     const run = async (model: string, name: string, category: string) => {
       try {const audio = await speech(env,{...body,text,provider:ttsProvider(model)}); return {...audio,model,name,category,status:'success'};}
-      catch (error) {return {model,name,category,status:'error',audioBase64:null,error:error instanceof Error ? error.message : 'Speech failed'};}
+      catch (error) {return {model,name,category,status:'error',audioBase64:null,error:error instanceof ApiError ? error.message : providerFailure(error)};}
     };
     const [flashLite,flashTts] = await Promise.all([run(TTS_MODELS[1],'Gemini 3.8 Flash-Lite TTS','High-Efficiency / Low-Latency'),run(TTS_MODELS[0],'Gemini 3.8 Flash TTS','Flagship Voice Design / Emotional')]);
     return {text,voiceName:body.voiceName || 'Puck',totalRoundTripMs:Date.now()-start,flashLite,flashTts};
   }
   if (path === '/api/gemini/transcribe') {
     requiredText(body.audioBase64,'audioBase64',MAX_BODY);
-    // Keep the requested transcription model; do not silently switch to a text model.
-    const response = await gemini(env).models.generateContent({model:'gemini-3.5-transcribe',contents:[{role:'user',parts:[{inlineData:{data:body.audioBase64,mimeType:(body.mimeType || 'audio/webm').split(';')[0]}},{text:'תמלל במדויק בעברית. החזר רק את המילים שנאמרו.'}]}]});
-    return {transcript:response.text?.trim() || '',engineUsed:'gemini-3.5-transcribe'};
+    const mimeType = String(body.mimeType || 'audio/webm').split(';')[0];
+    if (!['audio/webm','audio/ogg','audio/mp4','audio/wav','audio/mpeg','audio/mp3'].includes(mimeType)) throw new ApiError(400,'Unsupported recording format');
+    const response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+      method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':requireKey(env.GEMINI_API_KEY,'GEMINI_API_KEY')},
+      body:JSON.stringify({model:'gemini-3.5-transcribe',input:[{type:'audio',data:body.audioBase64,mime_type:mimeType}],generation_config:{transcription_config:{language_codes:['he-IL']}}}),
+    });
+    if (!response.ok) throw new ApiError(502,`Gemini transcription rejected the request (HTTP ${response.status}); check model access, permissions and billing.`);
+    const result = await response.json() as any;
+    const transcript = (result.output_text || (result.outputs || []).filter((x:any)=>x.type==='text').map((x:any)=>x.text || '').join('')).trim();
+    if (!transcript) throw new ApiError(502,'Gemini transcription returned no text. No substitute model was used.');
+    return {transcript,engineUsed:'gemini-3.5-transcribe'};
   }
   if (path === '/api/gemini/chat' || path === '/api/gemini/run-scenario') {
     const scenario = path.endsWith('run-scenario');
@@ -185,7 +225,8 @@ export default {
       let body: any;
       try {body=JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');} catch {throw new ApiError(400,'Invalid JSON body');}
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw new ApiError(400,'JSON object is required');
-      return json(await route(path,body,env,start));
+      const result = await route(path,body,env,start);
+      return result instanceof Response ? result : json(result);
     } catch (error) {
       // SDK errors can contain URLs or request headers: never echo them or log credentials.
       return json({error:error instanceof ApiError ? error.message : providerFailure(error),latencyMs:Date.now()-start},error instanceof ApiError ? error.status : 502);
