@@ -1,8 +1,9 @@
+import { latency } from '../utils/latency';
 import React, { useEffect, useState } from 'react';
 import { ArrowRightLeft, Clock3, Loader2, Play, RefreshCw, Volume2 } from 'lucide-react';
 
 type Provider = { id: string; label: string; configured: boolean };
-type Result = { provider: Provider; audioBase64?: string; mimeType?: string; modelUsed?: string; latencyMs?: number; error?: string };
+type Result = { provider: Provider; audioBase64?: string; mimeType?: string; modelUsed?: string; latencyMs?: number; requestStart?: number; audioReady?: number; firstPlayback?: number; error?: string };
 
 const TEST_TEXT = 'הכסף?! בואנה, אתה רציני איתי עכשיו? לא, כי אני יושב פה ומצפה שתגיד לי שליחות ונשמה. וואו, הרגת אותי. דוגרי, מעריך את הכנות.';
 
@@ -41,7 +42,7 @@ export function TtsProviderComparisonLab() {
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-        return { provider, ...data, latencyMs: data.latencyMs ?? Math.round(performance.now() - start) };
+        return { provider, ...data, requestStart: start, audioReady: performance.now(), latencyMs: data.latencyMs ?? Math.round(performance.now() - start) };
       } catch (error: any) {
         return { provider, error: error.message || 'Generation failed', latencyMs: Math.round(performance.now() - start) };
       }
@@ -94,7 +95,8 @@ export function TtsProviderComparisonLab() {
         </div>
         {r.error ? <p className="mt-4 rounded-xl bg-rose-950/40 p-3 text-sm text-rose-200">{r.error}</p> : <>
           <p className="mt-2 text-xs text-slate-500">{r.modelUsed}</p>
-          <audio className="mt-4 w-full" controls preload="none" src={`data:${r.mimeType};base64,${r.audioBase64}`} />
+          <p className="mt-2 text-xs text-slate-400">בקשה: {Math.round(r.requestStart || 0)}ms · אודיו: {Math.round((r.audioReady || 0) - (r.requestStart || 0))}ms · ניגון ראשון: {r.firstPlayback === undefined ? '—' : `${Math.round(r.firstPlayback - (r.requestStart || 0))}ms`} (אומדן דפדפן)</p>
+          <audio onPlaying={() => { if (r.firstPlayback !== undefined) return; const at = performance.now(); latency.playback('HTMLMediaElement playing event', undefined, 0, r.audioBase64); setResults(current => current.map(item => item.provider.id === r.provider.id ? {...item, firstPlayback: at} : item)); }} className="mt-4 w-full" controls preload="none" src={`data:${r.mimeType};base64,${r.audioBase64}`} />
         </>}
       </article>)}
     </div>}

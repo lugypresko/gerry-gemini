@@ -109,11 +109,8 @@ export const TtsComparisonLab: React.FC<TtsComparisonLabProps> = ({
         }),
       });
 
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-
-      const data: ComparisonResult = await res.json();
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       setResult(data);
       sfxEngine.play('lightbulb_ding');
     } catch (err: any) {

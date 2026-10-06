@@ -1,3 +1,5 @@
+import { ConfigurationStatus } from './components/ConfigurationStatus';
+import { LatencyMeasurements } from './components/LatencyMeasurements';
 import React, { useState } from 'react';
 import { PodcastStudio } from './components/PodcastStudio';
 import { ExperimentLab } from './components/ExperimentLab';
@@ -118,6 +120,8 @@ export default function App() {
         </div>
       </header>
 
+      <ConfigurationStatus />
+      <LatencyMeasurements />
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
         {activeTab === 'studio' && (
