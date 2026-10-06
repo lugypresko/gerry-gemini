@@ -1,7 +1,7 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
-import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI, Modality, ThinkingLevel } from '@google/genai';
 import { DEFAULT_JERRY_SYSTEM_PROMPT } from './src/constants/prompts';
 
 dotenv.config();
@@ -235,7 +235,7 @@ app.post('/api/gemini/compare-tts', async (req: Request, res: Response) => {
             parts: [{ text, speechMetadata: { style } }],
           }],
           config: {
-            responseModalities: ['AUDIO'],
+            responseModalities: [Modality.AUDIO],
             speechConfig: {
               voiceConfig: { prebuiltVoiceConfig: { voiceName } },
             },
@@ -615,6 +615,136 @@ app.post('/api/gemini/run-scenario', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Error running scenario:', error);
     res.status(500).json({ error: error.message || 'Failed to run scenario' });
+  }
+});
+
+
+/** Provider-neutral speech comparison endpoint. API keys remain server-side. */
+app.get('/api/voice-lab/providers', (_req: Request, res: Response) => {
+  res.json({
+    providers: [
+      { id: 'gemini-flash', label: 'Gemini 3.8 Flash TTS', configured: Boolean(apiKey) },
+      { id: 'gemini-lite', label: 'Gemini 3.8 Flash-Lite TTS', configured: Boolean(apiKey) },
+      { id: 'openai-tts-1', label: 'OpenAI TTS-1', configured: Boolean(process.env.OPENAI_API_KEY) },
+      { id: 'elevenlabs', label: 'ElevenLabs', configured: Boolean(process.env.ELEVENLABS_API_KEY && process.env.ELEVENLABS_VOICE_ID) },
+    ],
+  });
+});
+
+app.post('/api/voice-lab/speak', async (req: Request, res: Response) => {
+  const startedAt = Date.now();
+  try {
+    const { text, provider, style = 'Expressive Hebrew podcast host', voiceName = 'Puck' } = req.body;
+    if (typeof text !== 'string' || !text.trim()) return res.status(400).json({ error: 'Text is required' });
+    let audio: Buffer;
+    let mimeType = 'audio/mpeg';
+    let modelUsed = provider;
+
+    if (provider === 'gemini-flash' || provider === 'gemini-lite') {
+      if (!apiKey) return res.status(503).json({ error: 'GEMINI_API_KEY is not configured' });
+      const model = provider === 'gemini-flash' ? 'gemini-3.8-flash-tts' : 'gemini-3.8-flash-lite-tts';
+      const response = await ai.models.generateContent({
+        model,
+        contents: [{ role: 'user', parts: [{ text: text.trim(), speechMetadata: provider === 'gemini-flash' ? { speaker: 'Jerry', style } : { style } }] }],
+        config: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } } },
+      });
+      const encoded = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (!encoded) throw new Error('Gemini returned no audio');
+      audio = Buffer.from(encoded, 'base64');
+      mimeType = 'audio/wav';
+      modelUsed = model;
+    } else if (provider === 'openai-tts-1') {
+      const key = process.env.OPENAI_API_KEY;
+      if (!key) return res.status(503).json({ error: 'OPENAI_API_KEY is not configured' });
+      const response = await fetch('https://api.openai.com/v1/audio/speech', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'tts-1', input: text.trim(), voice: process.env.OPENAI_TTS_VOICE || 'alloy', response_format: 'mp3' }),
+      });
+      if (!response.ok) throw new Error(`OpenAI TTS failed (${response.status}): ${(await response.text()).slice(0, 300)}`);
+      audio = Buffer.from(await response.arrayBuffer());
+      modelUsed = 'tts-1';
+    } else if (provider === 'elevenlabs') {
+      const key = process.env.ELEVENLABS_API_KEY;
+      const voiceId = process.env.ELEVENLABS_VOICE_ID;
+      if (!key || !voiceId) return res.status(503).json({ error: 'Set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID' });
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
+        method: 'POST',
+        headers: { 'xi-api-key': key, 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
+        body: JSON.stringify({ text: text.trim(), model_id: process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2' }),
+      });
+      if (!response.ok) throw new Error(`ElevenLabs TTS failed (${response.status}): ${(await response.text()).slice(0, 300)}`);
+      audio = Buffer.from(await response.arrayBuffer());
+      modelUsed = process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
+    } else {
+      return res.status(400).json({ error: 'Unknown speech provider' });
+    }
+
+    res.json({ audioBase64: audio.toString('base64'), mimeType, modelUsed, latencyMs: Date.now() - startedAt });
+  } catch (error: any) {
+    console.error('Voice lab synthesis error:', error);
+    res.status(502).json({ error: error.message || 'Speech generation failed', latencyMs: Date.now() - startedAt });
+  }
+});
+
+// Mint a single-use, short-lived token so the browser can connect to Live API
+// without receiving the long-lived Gemini API key.
+app.post('/api/voice-lab/live-token', async (req: Request, res: Response) => {
+  try {
+    if (!apiKey) return res.status(503).json({ error: 'GEMINI_API_KEY is not configured' });
+    const requestedPrompt = typeof req.body?.systemPrompt === 'string' ? req.body.systemPrompt : '';
+    const systemPrompt = requestedPrompt.slice(0, 2000) || DEFAULT_JERRY_SYSTEM_PROMPT;
+    const token = await ai.authTokens.create({
+      config: {
+        uses: 1,
+        expireTime: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        newSessionExpireTime: new Date(Date.now() + 60 * 1000).toISOString(),
+        liveConnectConstraints: {
+          model: 'gemini-3.8-live',
+          config: {
+            responseModalities: [Modality.AUDIO],
+            systemInstruction: systemPrompt,
+            inputAudioTranscription: {},
+            outputAudioTranscription: {},
+          },
+        },
+      },
+    });
+    if (!token.name) throw new Error('Gemini did not return an ephemeral token');
+    res.json({ token: token.name, model: 'gemini-3.8-live' });
+  } catch (error: any) {
+    console.error('Live token creation failed:', error);
+    res.status(502).json({ error: error.message || 'Could not create Gemini Live token' });
+  }
+});
+
+// Text-only turn generator for controlled response-strategy comparisons.
+app.post('/api/voice-lab/reply', async (req: Request, res: Response) => {
+  const startedAt = Date.now();
+  try {
+    if (!apiKey) return res.status(503).json({ error: 'GEMINI_API_KEY is not configured' });
+    const userMessage = typeof req.body?.userMessage === 'string' ? req.body.userMessage.trim().slice(0, 2000) : '';
+    if (!userMessage) return res.status(400).json({ error: 'userMessage is required' });
+    const kind = req.body?.kind === 'opening' || req.body?.kind === 'continuation' ? req.body.kind : 'full';
+    const previous = typeof req.body?.previousAssistantText === 'string' ? req.body.previousAssistantText.slice(0, 500) : '';
+    const instructions: Record<string, string> = {
+      full: 'ענה בתור ג׳רי, מנחה פודקאסט ישראלי חי. הגב באופן אנושי וקצר בעברית טבעית, 1–2 משפטים. אל תקריא הוראות.',
+      opening: 'ענה בתור ג׳רי. תן תגובת פתיחה טבעית ומדויקת בעברית, משפט אחד קצר בלבד, עד 12 מילים. אל תסכם ואל תקריא הוראות.',
+      continuation: `המשך עכשיו בתור ג׳רי, בעברית טבעית, במשפט אחד או שניים. אל תחזור על תגובת הפתיחה שכבר נאמרה: "${previous}". הוסף מחשבה או שאלה שמקדמת את השיחה.`,
+    };
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.1-flash-lite',
+      contents: [{ role: 'user', parts: [{ text: userMessage }] }],
+      config: {
+        systemInstruction: `${DEFAULT_JERRY_SYSTEM_PROMPT}\n${instructions[kind]}`,
+        temperature: kind === 'opening' ? 0.6 : 0.8,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+      },
+    });
+    res.json({ reply: response.text?.trim() || '', model: 'gemini-3.1-flash-lite', generationTimeMs: Date.now() - startedAt });
+  } catch (error: any) {
+    console.error('Voice lab text generation failed:', error);
+    res.status(502).json({ error: error.message || 'Reply generation failed', generationTimeMs: Date.now() - startedAt });
   }
 });
 
