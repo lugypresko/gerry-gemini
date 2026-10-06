@@ -1,7 +1,7 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
-import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI, Modality, ThinkingLevel } from '@google/genai';
 import { DEFAULT_JERRY_SYSTEM_PROMPT } from './src/constants/prompts';
 
 dotenv.config();
@@ -235,7 +235,7 @@ app.post('/api/gemini/compare-tts', async (req: Request, res: Response) => {
             parts: [{ text, speechMetadata: { style } }],
           }],
           config: {
-            responseModalities: ['AUDIO'],
+            responseModalities: [Modality.AUDIO],
             speechConfig: {
               voiceConfig: { prebuiltVoiceConfig: { voiceName } },
             },
@@ -684,6 +684,67 @@ app.post('/api/voice-lab/speak', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Voice lab synthesis error:', error);
     res.status(502).json({ error: error.message || 'Speech generation failed', latencyMs: Date.now() - startedAt });
+  }
+});
+
+// Mint a single-use, short-lived token so the browser can connect to Live API
+// without receiving the long-lived Gemini API key.
+app.post('/api/voice-lab/live-token', async (req: Request, res: Response) => {
+  try {
+    if (!apiKey) return res.status(503).json({ error: 'GEMINI_API_KEY is not configured' });
+    const requestedPrompt = typeof req.body?.systemPrompt === 'string' ? req.body.systemPrompt : '';
+    const systemPrompt = requestedPrompt.slice(0, 2000) || DEFAULT_JERRY_SYSTEM_PROMPT;
+    const token = await ai.authTokens.create({
+      config: {
+        uses: 1,
+        expireTime: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        newSessionExpireTime: new Date(Date.now() + 60 * 1000).toISOString(),
+        liveConnectConstraints: {
+          model: 'gemini-3.8-live',
+          config: {
+            responseModalities: [Modality.AUDIO],
+            systemInstruction: systemPrompt,
+            inputAudioTranscription: {},
+            outputAudioTranscription: {},
+          },
+        },
+      },
+    });
+    if (!token.name) throw new Error('Gemini did not return an ephemeral token');
+    res.json({ token: token.name, model: 'gemini-3.8-live' });
+  } catch (error: any) {
+    console.error('Live token creation failed:', error);
+    res.status(502).json({ error: error.message || 'Could not create Gemini Live token' });
+  }
+});
+
+// Text-only turn generator for controlled response-strategy comparisons.
+app.post('/api/voice-lab/reply', async (req: Request, res: Response) => {
+  const startedAt = Date.now();
+  try {
+    if (!apiKey) return res.status(503).json({ error: 'GEMINI_API_KEY is not configured' });
+    const userMessage = typeof req.body?.userMessage === 'string' ? req.body.userMessage.trim().slice(0, 2000) : '';
+    if (!userMessage) return res.status(400).json({ error: 'userMessage is required' });
+    const kind = req.body?.kind === 'opening' || req.body?.kind === 'continuation' ? req.body.kind : 'full';
+    const previous = typeof req.body?.previousAssistantText === 'string' ? req.body.previousAssistantText.slice(0, 500) : '';
+    const instructions: Record<string, string> = {
+      full: 'ענה בתור ג׳רי, מנחה פודקאסט ישראלי חי. הגב באופן אנושי וקצר בעברית טבעית, 1–2 משפטים. אל תקריא הוראות.',
+      opening: 'ענה בתור ג׳רי. תן תגובת פתיחה טבעית ומדויקת בעברית, משפט אחד קצר בלבד, עד 12 מילים. אל תסכם ואל תקריא הוראות.',
+      continuation: `המשך עכשיו בתור ג׳רי, בעברית טבעית, במשפט אחד או שניים. אל תחזור על תגובת הפתיחה שכבר נאמרה: "${previous}". הוסף מחשבה או שאלה שמקדמת את השיחה.`,
+    };
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.1-flash-lite',
+      contents: [{ role: 'user', parts: [{ text: userMessage }] }],
+      config: {
+        systemInstruction: `${DEFAULT_JERRY_SYSTEM_PROMPT}\n${instructions[kind]}`,
+        temperature: kind === 'opening' ? 0.6 : 0.8,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+      },
+    });
+    res.json({ reply: response.text?.trim() || '', model: 'gemini-3.1-flash-lite', generationTimeMs: Date.now() - startedAt });
+  } catch (error: any) {
+    console.error('Voice lab text generation failed:', error);
+    res.status(502).json({ error: error.message || 'Reply generation failed', generationTimeMs: Date.now() - startedAt });
   }
 });
 
