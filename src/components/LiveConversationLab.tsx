@@ -293,9 +293,11 @@ export function LiveConversationLab({ systemPrompt }: { systemPrompt: string }) 
   const markFirst = () => {if(firstOutputRef.current===null){firstOutputRef.current=performance.now();setFirstAudioMs(Math.round(firstOutputRef.current-strategyStartRef.current));}};
   const playSpeech = async (utterance:SpokenReply) => {const graph=await getGraph();await graph.playEncoded(utterance.audioBase64,utterance.mimeType);markFirst();latency.playback('Web Audio scheduled start',undefined,25,utterance.audioBase64);await graph.drained();};
   const streamSpeech = async (text:string) => {
-    const graph=await getGraph();graph.onFirstAudio=markFirst;
+    const graph=await getGraph();
     const abort=abortRef.current!;const response=await fetch('/api/voice-lab/speak-stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,provider:ttsProvider}),signal:abort.signal});
-    await consumeSpeechStream(response,graph,abort.signal);addLine('ג׳רי',text);
+    const sampleId=latency.forResponse(response);
+    graph.onFirstAudio=()=>{markFirst();latency.playback('Web Audio scheduled start; speaker latency unmeasured',sampleId,25);};
+    try{await consumeSpeechStream(response,graph,abort.signal,()=>{if(sampleId)latency.ready(sampleId,'audioReady');});addLine('ג׳רי',text);}finally{graph.onFirstAudio=undefined;}
   };
 
   const runStrategy = async () => {

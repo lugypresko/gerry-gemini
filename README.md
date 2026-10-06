@@ -106,16 +106,16 @@ The app remains a lab without user authentication, as on the source branch. Same
 
 The currently installed SDK has a stale v1alpha-only warning for ephemeral tokens; this branch follows the official v1beta guide. A real-token connection test is still required.
 
-## Current test report
+## Current test report (2026-10-06)
 
-- Typecheck: passed.
-- React/Vite production build: passed; existing >500 kB client chunk warning remains.
-- Wrangler deploy dry-run: passed; approximately 952 KiB Worker / 120 KiB gzip, 5 static files.
-- API contract/smoke tests in-process: passed; see `tests/worker.test.ts`.
-- React interface missing-key checks in JSDOM: passed.
-- Local HTTP Worker and real browser verification: **blocked by this execution environment**, which denies socket/interface access (`uv_interface_addresses`, EPERM). `test:smoke` is provided for your normal development machine. SPA routing is configured per official docs; actual network-runtime behavior must be verified there.
-- Real provider calls, Hebrew/emotion quality, microphone permissions, interruption handling, audio decoding/playback, account model access, and real latency/CPU: **not tested without credentials and a working browser/runtime**. Mocked calls verify contracts, not audio quality.
-- No merge or deployment performed.
+- Typecheck and React/Vite production build pass; >500 kB client chunk warning remains.
+- Wrangler dry run passes: 427 KiB Worker / 82 KiB gzip, four application static assets (plus Wrangler assets metadata).
+- 15 in-process API tests cover missing keys, independent providers, error redaction, Live token constraints, SDP handshake, Hebrew transcription contract and separate streamed PCM chunks.
+- Interface missing-key rendering and streaming latency instrumentation regression tests pass.
+- Local HTTP smoke suite is blocked: Wrangler cannot start in this environment (`uv_interface_addresses`). Run `npm run dev:worker` and `npm run test:smoke` on a normal development machine. These are not counted as passed HTTP smoke tests.
+- The branch was deployed after the user's later deployment authorization. Browser checks verify the new Live selector, local recording controls and real Gemini text/audio output. No merge performed.
+- Real microphone input, both Live engines' duplex conversation, interruption quality and downloaded recording audibility remain human acceptance tests. A configured key does not prove access to a particular Live model.
+- See [VOICE_PLAN.md](./VOICE_PLAN.md) for implemented routes, recording limitations and the manual acceptance sequence. No latency improvement is claimed without comparable measurements.
 
 ## Official sources
 

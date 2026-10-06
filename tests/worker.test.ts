@@ -8,6 +8,11 @@ test('recording transcription uses Interactions and returns Hebrew text',async()
  globalThis.fetch=async(input,init)=>{assert.equal(input,'https://generativelanguage.googleapis.com/v1beta/interactions');const body=JSON.parse(init!.body as string);assert.equal(body.model,'gemini-3.5-transcribe');assert.equal(body.input[0].mime_type,'audio/webm');assert.deepEqual(body.generation_config.transcription_config.language_codes,['he-IL']);return Response.json({output_text:'שלום ג׳רי'});};
  try{const r=await call('/api/gemini/transcribe',{audioBase64:'AAAA',mimeType:'audio/webm;codecs=opus'},{GEMINI_API_KEY:'fixture'});assert.equal(r.status,200);assert.equal((await r.json() as any).transcript,'שלום ג׳רי');}finally{globalThis.fetch=original;}
 });
+test('Gemini streaming forwards separate PCM chunks and completion',async()=>{
+ const original=globalThis.fetch;
+ globalThis.fetch=async(input,init)=>{const request=input instanceof Request?input:new Request(input,init);assert(request.url.includes('streamGenerateContent'));const event=(data:string)=>`data: ${JSON.stringify({candidates:[{content:{parts:[{inlineData:{data,mimeType:'audio/L16;rate=24000'}}]}}]})}\n\n`;return new Response(event('AQI=')+event('AwQ='),{headers:{'Content-Type':'text/event-stream'}});};
+ try{const r=await call('/api/voice-lab/speak-stream',{text:'שלום',provider:'gemini-flash'},{GEMINI_API_KEY:'fixture'});assert.equal(r.status,200);assert.match(r.headers.get('content-type')!,/ndjson/);const lines=(await r.text()).trim().split('\n').map(x=>JSON.parse(x));assert.deepEqual(lines.map(x=>x.type),['audio','audio','done']);assert.equal(lines[0].data,'AQI=');assert.equal(lines[1].data,'AwQ=');}finally{globalThis.fetch=original;}
+});
 test('empty transcription is an explicit failure, no invented transcript',async()=>{
  const original=globalThis.fetch;globalThis.fetch=async()=>Response.json({outputs:[]});
  try{const r=await call('/api/gemini/transcribe',{audioBase64:'AAAA'},{GEMINI_API_KEY:'fixture'});assert.equal(r.status,502);assert.match((await r.json() as any).error,/no text/);}finally{globalThis.fetch=original;}

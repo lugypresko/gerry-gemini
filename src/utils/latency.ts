@@ -2,10 +2,12 @@ export type LatencySample = { id: number; path: string; requestStart: number; te
 let samples: LatencySample[] = [];
 let nextId = 0;
 const audioSamples = new Map<string, number>();
+const responseSamples = new WeakMap<Response,number>();
 const listeners = new Set<() => void>();
 const emit = () => { listeners.forEach(listener => listener()); };
 export const latency = {
   snapshot: () => samples,
+  forResponse: (response:Response) => responseSamples.get(response),
   subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
   begin: (path: string) => { const sample = {id: ++nextId, path, requestStart: performance.now()}; samples = [...samples.slice(-19), sample]; emit(); return sample.id; },
   ready: (id: number, stage: 'textReady' | 'audioReady') => { const sample = samples.find(s => s.id === id); if (sample && sample[stage] === undefined) { sample[stage] = performance.now(); samples = [...samples]; emit(); } },
@@ -27,6 +29,8 @@ export function installLatencyMeasurements() {
     const sample: LatencySample = {id: ++nextId,path,requestStart: performance.now()};
     samples = [...samples.slice(-19), sample]; emit();
     const response = await original(input, init);
+    responseSamples.set(response,sample.id);
+    if(response.headers.get('content-type')?.includes('application/x-ndjson')) return response;
     const data = await response.clone().json().catch(() => null);
     const ready = performance.now();
     if (response.ok && data) {
