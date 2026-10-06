@@ -1,3 +1,4 @@
+import { latency } from '../utils/latency';
 import React, { useEffect, useRef, useState } from 'react';
 import { LoaderCircle, Mic, MicOff, Radio, Trash2 } from 'lucide-react';
 
@@ -22,6 +23,7 @@ function floatToBase64Pcm(input: Float32Array): string {
 }
 
 export function LiveConversationLab({ systemPrompt }: { systemPrompt: string }) {
+  const [liveConfigured, setLiveConfigured] = useState<boolean | null>(null);
   const [status, setStatus] = useState<'idle' | 'connecting' | 'live' | 'error'>('idle');
   const [lines, setLines] = useState<Line[]>([]);
   const [error, setError] = useState('');
@@ -34,6 +36,9 @@ export function LiveConversationLab({ systemPrompt }: { systemPrompt: string }) 
   const [strategyLines, setStrategyLines] = useState<SpokenReply[]>([]);
   const [firstAudioMs, setFirstAudioMs] = useState<number | null>(null);
   const [totalStrategyMs, setTotalStrategyMs] = useState<number | null>(null);
+  const firstOutputRef = useRef<number | null>(null);
+  const strategyStartRef = useRef(0);
+  const liveTimingRef = useRef<number | null>(null);
   const sessionRef = useRef<any>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const inputContextRef = useRef<AudioContext | null>(null);
@@ -48,6 +53,7 @@ export function LiveConversationLab({ systemPrompt }: { systemPrompt: string }) 
     fetch('/api/voice-lab/providers').then((response) => response.json()).then((data) => {
       const available = (data.providers || []) as TtsProvider[];
       setProviders(available);
+      setLiveConfigured(Boolean(data.live?.configured));
       const first = available.find((provider) => provider.configured);
       if (first) setTtsProvider(first.id);
     }).catch(() => setStrategyError('לא ניתן לטעון את מצב ספקי הדיבור.'));
@@ -85,6 +91,7 @@ export function LiveConversationLab({ systemPrompt }: { systemPrompt: string }) 
     source.connect(context.destination);
     const startAt = Math.max(context.currentTime + 0.025, nextPlaybackTimeRef.current);
     source.start(startAt);
+    if (liveTimingRef.current !== null) { latency.ready(liveTimingRef.current, 'audioReady'); latency.playback('Web Audio scheduled start (session-level, not turn latency)', liveTimingRef.current, (startAt - context.currentTime) * 1000); }
     nextPlaybackTimeRef.current = startAt + buffer.duration;
     outputSourcesRef.current.push(source);
     source.onended = () => {
@@ -112,8 +119,10 @@ export function LiveConversationLab({ systemPrompt }: { systemPrompt: string }) 
 
   const startSession = async () => {
     if (status === 'connecting' || status === 'live') return;
+    if (liveConfigured === false) { setError('חסר GEMINI_API_KEY בשרת'); return; }
     setError('');
     setStatus('connecting');
+    liveTimingRef.current = latency.begin('Gemini Live: session start → first response');
     try {
       const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       micStreamRef.current = mic;
@@ -135,7 +144,7 @@ export function LiveConversationLab({ systemPrompt }: { systemPrompt: string }) 
       const { GoogleGenAI, Modality } = await import('@google/genai');
       const ai = new GoogleGenAI({ apiKey: tokenData.token, httpOptions: { apiVersion: 'v1beta' } });
       const session = await ai.live.connect({
-        model: 'gemini-3.8-live',
+        model: tokenData.model,
         config: {
           responseModalities: [Modality.AUDIO],
           inputAudioTranscription: {},
@@ -149,7 +158,7 @@ export function LiveConversationLab({ systemPrompt }: { systemPrompt: string }) 
             const heard = content?.inputTranscription?.text;
             if (heard) addLine('איתי', heard);
             const said = content?.outputTranscription?.text;
-            if (said) addLine('ג׳רי', said);
+            if (said) { addLine('ג׳רי', said); if (liveTimingRef.current !== null) latency.ready(liveTimingRef.current, 'textReady'); }
             const parts = content?.modelTurn?.parts ?? [];
             for (const part of parts) {
               if (part.inlineData?.data) queuePcmAudio(part.inlineData.data);
@@ -219,6 +228,7 @@ export function LiveConversationLab({ systemPrompt }: { systemPrompt: string }) 
     const audio = new Audio(`data:${utterance.mimeType};base64,${utterance.audioBase64}`);
     audio.onended = () => resolve();
     audio.onerror = () => reject(new Error('הדפדפן לא הצליח לנגן את האודיו'));
+    audio.onplaying = () => { latency.playback('HTMLMediaElement playing event', undefined, 0, utterance.audioBase64); if (firstOutputRef.current === null) { firstOutputRef.current = performance.now(); setFirstAudioMs(Math.round(firstOutputRef.current - strategyStartRef.current)); } };
     audio.play().catch(reject);
   });
 
@@ -230,12 +240,9 @@ export function LiveConversationLab({ systemPrompt }: { systemPrompt: string }) 
     setFirstAudioMs(null);
     setTotalStrategyMs(null);
     const started = performance.now();
-    let firstOutputAt: number | null = null;
+    strategyStartRef.current = started;
+    firstOutputRef.current = null;
     const append = (line: SpokenReply) => {
-      if (firstOutputAt === null) {
-        firstOutputAt = performance.now();
-        setFirstAudioMs(Math.round(firstOutputAt - started));
-      }
       setStrategyLines((current) => [...current, line]);
       return playSpeech(line);
     };
@@ -280,7 +287,7 @@ export function LiveConversationLab({ systemPrompt }: { systemPrompt: string }) 
 
     <div className="rounded-3xl border border-slate-800 bg-slate-900 p-5">
       <div className="flex flex-wrap items-center gap-3">
-        {status === 'live' ? <button onClick={() => void stopSession()} className="flex items-center gap-2 rounded-xl bg-rose-600 px-5 py-3 text-sm font-black text-white"><MicOff className="h-4 w-4" /> סיים שיחה</button> : <button onClick={() => void startSession()} disabled={status === 'connecting'} className="flex items-center gap-2 rounded-xl bg-emerald-500 px-5 py-3 text-sm font-black text-slate-950 disabled:opacity-60">{status === 'connecting' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Mic className="h-4 w-4" />}{status === 'connecting' ? 'מתחבר ומבקש הרשאת מיקרופון…' : 'התחל שיחת Live'}</button>}
+        {status === 'live' ? <button onClick={() => void stopSession()} className="flex items-center gap-2 rounded-xl bg-rose-600 px-5 py-3 text-sm font-black text-white"><MicOff className="h-4 w-4" /> סיים שיחה</button> : <button onClick={() => void startSession()} disabled={status === 'connecting' || liveConfigured !== true} className="flex items-center gap-2 rounded-xl bg-emerald-500 px-5 py-3 text-sm font-black text-slate-950 disabled:opacity-60">{status === 'connecting' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Mic className="h-4 w-4" />}{status === 'connecting' ? 'מתחבר ומבקש הרשאת מיקרופון…' : 'התחל שיחת Live'}</button>}
         <span className={`rounded-full border px-3 py-1.5 text-xs font-bold ${status === 'live' ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-300' : status === 'error' ? 'border-rose-500/50 bg-rose-950/40 text-rose-300' : 'border-slate-700 bg-slate-950 text-slate-400'}`}>{status === 'live' ? 'LIVE · Gemini 3.8 Live' : status === 'connecting' ? 'מתחבר' : status === 'error' ? 'שגיאה' : 'לא מחובר'}</span>
         {lines.length > 0 && <button onClick={() => setLines([])} className="mr-auto flex items-center gap-1 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-400"><Trash2 className="h-3.5 w-3.5" /> נקה תמליל</button>}
       </div>
@@ -308,7 +315,7 @@ export function LiveConversationLab({ systemPrompt }: { systemPrompt: string }) 
       <div className="mt-4 flex flex-wrap items-end gap-3">
         <label className="text-xs font-bold text-slate-300">מנוע דיבור<select value={ttsProvider} onChange={(event) => setTtsProvider(event.target.value)} className="mt-1 block rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">{providers.map((provider) => <option key={provider.id} value={provider.id} disabled={!provider.configured}>{provider.label}{provider.configured ? '' : ' — לא הוגדר'}</option>)}</select></label>
         <button onClick={() => void runStrategy()} disabled={strategyBusy || !testInput.trim() || !providers.some((provider) => provider.id === ttsProvider && provider.configured)} className="flex items-center gap-2 rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-black text-slate-950 disabled:opacity-50">{strategyBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Radio className="h-4 w-4" />}{strategyBusy ? 'מריץ ניסוי…' : 'הרץ את דרך התגובה'}</button>
-        {firstAudioMs !== null && <span className="text-xs text-slate-300">זמן עד תחילת תגובה: <b className="font-mono text-emerald-300">{firstAudioMs}ms</b></span>}
+        {firstAudioMs !== null && <span className="text-xs text-slate-300">ניגון ראשון (אירוע דפדפן): <b className="font-mono text-emerald-300">{firstAudioMs}ms</b></span>}
         {totalStrategyMs !== null && <span className="text-xs text-slate-300">זמן כולל: <b className="font-mono text-amber-300">{totalStrategyMs}ms</b></span>}
       </div>
       {strategyError && <p role="alert" className="mt-3 rounded-xl bg-rose-950/40 p-3 text-sm text-rose-200">{strategyError}</p>}

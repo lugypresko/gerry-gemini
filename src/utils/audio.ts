@@ -1,3 +1,4 @@
+import { latency } from './latency';
 /**
  * Audio playback and speech helper for Jerry & Itay podcast.
  * Decodes WAV via AudioContext.decodeAudioData, with Blob audio fallback,
@@ -92,6 +93,7 @@ class AudioController {
 
       source.onended = endWrapper;
       source.start(0);
+      latency.playback('Web Audio scheduled start; hardware latency not measured', undefined, 0, base64Data);
       this.currentSource = source;
     } catch (err) {
       console.warn('decodeAudioData error, attempting Blob URL playback:', err);
@@ -118,6 +120,7 @@ class AudioController {
           endWrapper();
         };
 
+        audio.onplaying = () => latency.playback('HTMLMediaElement playing event', undefined, 0, base64Data);
         await audio.play();
       } catch (audioErr) {
         console.warn('Blob audio play failed:', audioErr);

@@ -38,6 +38,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
   activeTtsModel: propActiveTtsModel,
   setActiveTtsModel: propSetActiveTtsModel,
   selectedVoice = 'Puck',
+  systemPrompt,
 }) => {
   const [internalTtsModel, setInternalTtsModel] = useState<'gemini-3.8-flash-lite-tts' | 'gemini-3.8-flash-tts'>('gemini-3.8-flash-lite-tts');
   const ttsModel = propActiveTtsModel || internalTtsModel;
@@ -69,6 +70,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
 
   const [micAudioLevel, setMicAudioLevel] = useState(0);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
   const [micError, setMicError] = useState<string | null>(null);
   const [alternateAudioLoading, setAlternateAudioLoading] = useState<string | null>(null);
 
@@ -243,6 +245,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
             body: JSON.stringify({ audioBase64: base64Audio, mimeType }),
           });
           const data = await res.json();
+          if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
           const transcript = (data.transcript || '').trim();
 
           setIsTranscribing(false);
@@ -252,10 +255,10 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
           } else {
             setMicError('לא זוהה דיבור ברור בהקלטה. נסה לדבר שוב או להקליד.');
           }
-        } catch (fetchErr) {
+        } catch (fetchErr: any) {
           console.error('Transcription fetch error:', fetchErr);
           setIsTranscribing(false);
-          setMicError('התמלול נכשל. נסה שוב או הקלד ידנית.');
+          setMicError(fetchErr?.message || 'התמלול נכשל. נסה שוב או הקלד ידנית.');
         }
       };
     } catch (err) {
@@ -293,6 +296,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
           }),
         });
         const ttsData = await ttsRes.json();
+        if (!ttsRes.ok) throw new Error(ttsData.error || `HTTP ${ttsRes.status}`);
         if (ttsData.audioBase64) {
           msg.audioBase64 = ttsData.audioBase64;
           audioController.playBase64Wav(ttsData.audioBase64, () => {
@@ -300,14 +304,13 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
           });
           return;
         }
-      } catch {}
-
-      audioController.speakTextHebrew(
-        msg.text,
-        'jerry',
-        () => setIsJerrySpeaking(true),
-        () => setIsJerrySpeaking(false)
-      );
+      } catch (error: any) {
+        setApiError(error.message || 'יצירת האודיו נכשלה');
+        setIsJerrySpeaking(false);
+        return;
+      }
+      setApiError('הספק לא החזיר אודיו');
+      setIsJerrySpeaking(false);
     } else {
       setIsItaySpeaking(true);
       audioController.speakTextHebrew(
@@ -342,6 +345,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
       });
 
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       if (data.audioBase64) {
         setIsJerrySpeaking(true);
         audioController.playBase64Wav(data.audioBase64, () => {
@@ -349,7 +353,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
         });
       }
     } catch (e) {
-      console.warn('Failed to generate alternate audio:', e);
+      setApiError(e instanceof Error ? e.message : 'יצירת האודיו נכשלה');
     } finally {
       setAlternateAudioLoading(null);
     }
@@ -383,6 +387,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
   };
 
   const generateJerryReply = async (userPrompt: string) => {
+    setApiError(null);
     try {
       const startTime = Date.now();
       const response = await fetch('/api/gemini/chat', {
@@ -390,6 +395,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userMessage: userPrompt,
+          systemPrompt,
           messages: messages.slice(-4),
           ttsModel: ttsModel,
           voiceName: selectedVoice,
@@ -397,7 +403,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
       });
 
       const data = await response.json();
-      const replyText = data.reply || 'אה, וואלה? תסביר לי עוד קצת, אני איתך!';
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      const replyText = data.reply || '';
+      if (!replyText) throw new Error('הספק לא החזיר תשובה');
       const audioBase64 = data.audioBase64 || '';
       const usedTtsModel = data.ttsModel || ttsModel;
       const totalTimeMs = data.totalTimeMs || (Date.now() - startTime);
@@ -438,7 +446,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
       setIsItaySpeaking(false);
       playSpeakerAudio(jerryMsg);
     } catch (e) {
-      console.error('Failed to get Jerry reply:', e);
+      setApiError(e instanceof Error ? e.message : 'יצירת התשובה נכשלה');
     } finally {
       setIsLoadingJerry(false);
     }
@@ -491,6 +499,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
 
   return (
     <div className="space-y-6 text-right" dir="rtl">
+      {apiError && <p role="alert" className="rounded-xl border border-rose-700 bg-rose-950/40 p-3 text-sm text-rose-200">{apiError}</p>}
       
       {/* Sound Board & Ambient Music Bar */}
       <SoundBoardBar isSpeaking={isJerrySpeaking || isItaySpeaking} />

@@ -27,6 +27,7 @@ export const ExperimentLab: React.FC<ExperimentLabProps> = ({
 }) => {
   const [selectedScenarioId, setSelectedScenarioId] = useState<number>(1);
   const [selectedRunIndex, setSelectedRunIndex] = useState<number>(1);
+  const [apiError, setApiError] = useState<string | null>(null);
   const [isRunningLive, setIsRunningLive] = useState(false);
   const [expandedSystem, setExpandedSystem] = useState<'both' | 'gemini' | 'gpt'>('both');
 
@@ -148,6 +149,7 @@ export const ExperimentLab: React.FC<ExperimentLabProps> = ({
 
   const handleRunLiveScenario = async () => {
     setIsRunningLive(true);
+    setApiError(null);
     try {
       sfxEngine.play('transition_whoosh');
       const response = await fetch('/api/gemini/run-scenario', {
@@ -161,6 +163,7 @@ export const ExperimentLab: React.FC<ExperimentLabProps> = ({
       });
 
       const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       if (data.gemini?.text) {
         const updatedScenarios = scenarios.map((s) => {
           if (s.id !== selectedScenarioId) return s;
@@ -187,7 +190,7 @@ export const ExperimentLab: React.FC<ExperimentLabProps> = ({
         }
       }
     } catch (e) {
-      console.error('Error running live scenario:', e);
+      setApiError(e instanceof Error ? e.message : 'הרצת התרחיש נכשלה');
     } finally {
       setIsRunningLive(false);
     }
@@ -207,6 +210,7 @@ export const ExperimentLab: React.FC<ExperimentLabProps> = ({
 
   return (
     <div className="space-y-6 text-right" dir="rtl">
+      {apiError && <p role="alert" className="rounded-xl border border-rose-700 bg-rose-950/40 p-3 text-sm text-rose-200">{apiError}</p>}
       
       {/* Scenario Selector & Header */}
       <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
