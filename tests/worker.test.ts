@@ -71,3 +71,13 @@ test('Gemini failures report actionable status without echoing credentials or UR
  const result=providerFailure({status:403,message});assert(result.includes(expected));assert(result.includes('HTTP 403'));assert(!result.includes('fixture-secret'));assert(!result.includes('https://'));
  }
 });
+
+test('REST transcription reads model_output steps and never echoes user/thought text',async()=>{
+ const original=globalThis.fetch;
+ try {
+  globalThis.fetch=async()=>Response.json({status:'completed',steps:[{type:'user_input',content:[{type:'text',text:'do not echo'}]},{type:'model_output',content:[{type:'thought',text:'do not expose'},{type:'text',text:'שלום '},{type:'text',text:'ג׳רי'}]}]});
+  const r=await call('/api/gemini/transcribe',{audioBase64:'AAAA'},{GEMINI_API_KEY:'fixture'});assert.equal(r.status,200);assert.equal((await r.json() as any).transcript,'שלום ג׳רי');
+  globalThis.fetch=async()=>Response.json({steps:[{type:'user_input',content:[{type:'text',text:'do not echo'}]}]});
+  assert.equal((await call('/api/gemini/transcribe',{audioBase64:'AAAA'},{GEMINI_API_KEY:'fixture'})).status,502);
+ }finally{globalThis.fetch=original;}
+});

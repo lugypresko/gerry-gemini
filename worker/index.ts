@@ -184,7 +184,17 @@ async function route(path: string, body: any, env: Env, start: number): Promise<
     });
     if (!response.ok) throw new ApiError(502,`Gemini transcription rejected the request (HTTP ${response.status}); check model access, permissions and billing.`);
     const result = await response.json() as any;
-    const transcript = (result.output_text || (result.outputs || []).filter((x:any)=>x.type==='text').map((x:any)=>x.text || '').join('')).trim();
+    // output_text is an SDK convenience field, not guaranteed in REST responses.
+    // Only take model output after the last user input; never echo input/thoughts.
+    const steps = Array.isArray(result.steps) ? result.steps : [];
+    const lastInput = steps.findLastIndex((step:any)=>step.type === 'user_input');
+    const textParts = steps.slice(lastInput+1)
+      .filter((step:any)=>step.type === 'model_output' && Array.isArray(step.content))
+      .flatMap((step:any)=>step.content)
+      .filter((part:any)=>part.type === 'text' && typeof part.text === 'string')
+      .map((part:any)=>part.text);
+    const legacyParts = Array.isArray(result.outputs) ? result.outputs.filter((part:any)=>part.type === 'text' && typeof part.text === 'string').map((part:any)=>part.text) : [];
+    const transcript = (typeof result.output_text === 'string' && result.output_text.trim() ? result.output_text : textParts.join('') || legacyParts.join('')).trim();
     if (!transcript) throw new ApiError(502,'Gemini transcription returned no text. No substitute model was used.');
     return {transcript,engineUsed:'gemini-3.5-transcribe'};
   }
