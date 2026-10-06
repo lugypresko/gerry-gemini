@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import worker, { pcmToWav, type Env } from '../worker/index';
+import worker, { pcmToWav, providerFailure, type Env } from '../worker/index';
 const env:Env={ASSETS:{fetch:async()=>new Response('assets')}};
 const call=(path:string, body:any={}, bindings:Partial<Env>={})=>worker.fetch(new Request('http://localhost'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),{...env,...bindings});
 test('provider keys independently configure the corresponding provider',async()=>{
@@ -41,4 +41,10 @@ test('Live token is single-use, short-lived, bound to persona and beta API (mock
  const original=globalThis.fetch;let captured:any;
  globalThis.fetch=async(input,init)=>{const req=input instanceof Request?input:new Request(input,init);captured={url:req.url,body:await req.json()};return Response.json({name:'auth_tokens/fixture-token'});};
  try {const r=await call('/api/voice-lab/live-token',{systemPrompt:'Gerry fixture persona'},{GEMINI_API_KEY:'fixture-secret'});assert.equal(r.status,200);const data=await r.json() as any;assert.equal(data.token,'auth_tokens/fixture-token');assert.equal(data.model,'gemini-3.8-live');assert(captured.url.includes('/v1beta/'));assert.equal(captured.body.uses,1);assert.equal(captured.body.bidiGenerateContentSetup.model,'models/gemini-3.8-live');assert.equal(captured.body.bidiGenerateContentSetup.systemInstruction.parts[0].text,'Gerry fixture persona');assert(Date.parse(captured.body.newSessionExpireTime)-Date.now()<61000);assert(!JSON.stringify(data).includes('fixture-secret'));}finally{globalThis.fetch=original;}
+});
+
+test('Gemini failures report actionable status without echoing credentials or URLs',()=>{
+ for(const [message,expected] of [['PERMISSION_DENIED fixture-secret https://private','permission denied'],['API_KEY_INVALID fixture-secret','invalid API key'],['SERVICE_DISABLED fixture-secret','API is disabled'],['RESOURCE_EXHAUSTED fixture-secret','quota or billing']]) {
+ const result=providerFailure({status:403,message});assert(result.includes(expected));assert(result.includes('HTTP 403'));assert(!result.includes('fixture-secret'));assert(!result.includes('https://'));
+ }
 });
