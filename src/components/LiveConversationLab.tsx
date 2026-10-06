@@ -99,8 +99,9 @@ export function LiveConversationLab({ systemPrompt }: { systemPrompt: string }) 
     sourceRef.current = null;
     micStreamRef.current?.getTracks().forEach((track) => track.stop());
     micStreamRef.current = null;
-    try { sessionRef.current?.close(); } catch { /* session already closed */ }
+    const activeSession = sessionRef.current;
     sessionRef.current = null;
+    try { activeSession?.close(); } catch { /* session already closed */ }
     stopOutput();
     await inputContextRef.current?.close().catch(() => undefined);
     await outputContextRef.current?.close().catch(() => undefined);
@@ -156,11 +157,12 @@ export function LiveConversationLab({ systemPrompt }: { systemPrompt: string }) 
           },
           onerror: (event: any) => {
             setError(event?.message || 'שגיאת חיבור ל־Gemini Live');
+            void stopSession();
             setStatus('error');
           },
           onclose: (event: any) => {
             if (sessionRef.current) {
-              setStatus('idle');
+              void stopSession();
               if (event?.reason) addLine('מערכת', `החיבור נסגר: ${event.reason}`);
             }
           },

@@ -6,7 +6,6 @@ import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { SystemPromptEditor } from './components/SystemPromptEditor';
 import { TtsComparisonLab } from './components/TtsComparisonLab';
 import { TtsProviderComparisonLab } from './components/TtsProviderComparisonLab';
-import { LiveConversationLab } from './components/LiveConversationLab';
 import { INITIAL_SCENARIOS } from './data/scenarios';
 import { Scenario, EvaluationScores } from './types/podcast';
 import { DEFAULT_JERRY_SYSTEM_PROMPT } from './constants/prompts';
@@ -22,7 +21,7 @@ import {
 } from 'lucide-react';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'studio' | 'tts' | 'experiment' | 'blind' | 'analytics' | 'prompt' | 'tts-providers' | 'live'>('studio');
+  const [activeTab, setActiveTab] = useState<'studio' | 'tts' | 'experiment' | 'blind' | 'analytics' | 'prompt' | 'tts-providers'>('studio');
   const [scenarios, setScenarios] = useState<Scenario[]>(INITIAL_SCENARIOS);
   const [systemPrompt, setSystemPrompt] = useState<string>(DEFAULT_JERRY_SYSTEM_PROMPT);
   const [selectedVoice, setSelectedVoice] = useState<string>('Puck');
@@ -91,7 +90,6 @@ export default function App() {
               { id: 'studio', label: 'אולפן חי', icon: Radio },
               { id: 'tts', label: 'השוואת Gemini TTS', icon: Zap },
               { id: 'tts-providers', label: 'השוואת מנועי דיבור', icon: Sparkles },
-              { id: 'live', label: 'ניסוי שיחה חיה', icon: Radio },
               { id: 'experiment', label: 'מעבדת הניסוי', icon: FlaskConical },
               { id: 'blind', label: 'מבחן עיוור', icon: EyeOff },
               { id: 'analytics', label: 'דשבורד וסטטיסטיקה', icon: BarChart2 },
@@ -139,8 +137,6 @@ export default function App() {
         )}
 
         {activeTab === 'tts-providers' && <TtsProviderComparisonLab />}
-
-        {activeTab === 'live' && <LiveConversationLab systemPrompt={systemPrompt} />}
 
         {activeTab === 'experiment' && (
           <ExperimentLab
