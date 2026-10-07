@@ -32,3 +32,7 @@ Static Assets and small stateless request handlers fit the intended setup; provi
 ## Deployed streaming observation, 2026-10-06
 
 Gemini 3.8 Flash TTS, input `מה בעצם הביא אותך לעבוד פה?`: reply text ready 1810 ms (server duration), first PCM chunk 1190 ms after speech request, scheduled playback 1216 ms after speech request; strategy UI reported 3104 ms to first scheduled output and 19893 ms through playback completion. Provider output was real and the UI reported no error. These values are one observation; no matched-run performance comparison or physical speaker measurement was performed. An initial test exposed buffering by latency instrumentation; a regression test now verifies streaming headers return before the body completes.
+
+## Transcription request correction, 2026-10-07
+
+Recorded audio now follows the documented Files API resumable upload, then Interactions receives the file URI rather than inline bytes. The Worker attempts immediate deletion in a finally block, including rejected transcription calls; if deletion fails, provider retention rules apply. Model remains gemini-3.5-transcribe; there is no silent substitution. Typecheck, 18 API tests and Worker dry-run pass. Real microphone success after this request change is not yet verified.

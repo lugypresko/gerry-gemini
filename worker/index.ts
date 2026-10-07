@@ -116,6 +116,21 @@ function providers(env: Env) {
   ], openaiLive: {configured:Boolean(env.OPENAI_API_KEY),model:'gpt-live-1'}, live: {configured:Boolean(env.GEMINI_API_KEY),model:LIVE_MODEL}, text: {configured:Boolean(env.GEMINI_API_KEY),model:TEXT_MODEL}};
 }
 const postPaths = new Set(['/api/voice-lab/speak','/api/voice-lab/speak-stream','/api/voice-lab/openai-live','/api/voice-lab/reply','/api/voice-lab/live-token','/api/gemini/speak','/api/gemini/compare-tts','/api/gemini/chat','/api/gemini/transcribe','/api/gemini/run-scenario']);
+async function uploadTranscriptionAudio(env:Env, data:string, mimeType:string) {
+  const key=requireKey(env.GEMINI_API_KEY,'GEMINI_API_KEY');
+  const bytes=Buffer.from(data,'base64');
+  if(!bytes.length)throw new ApiError(400,'Recording is empty');
+  const start=await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files',{method:'POST',headers:{'x-goog-api-key':key,'Content-Type':'application/json','X-Goog-Upload-Protocol':'resumable','X-Goog-Upload-Command':'start','X-Goog-Upload-Header-Content-Length':String(bytes.length),'X-Goog-Upload-Header-Content-Type':mimeType},body:JSON.stringify({file:{display_name:'gerry-transcription'}})});
+  if(!start.ok)throw new ApiError(502,`Gemini recording upload could not start (HTTP ${start.status})`);
+  const uploadUrl=start.headers.get('x-goog-upload-url');
+  if(!uploadUrl || new URL(uploadUrl).origin!=='https://generativelanguage.googleapis.com')throw new ApiError(502,'Gemini returned an invalid upload destination');
+  const upload=await fetch(uploadUrl,{method:'POST',headers:{'X-Goog-Upload-Offset':'0','X-Goog-Upload-Command':'upload, finalize','Content-Type':mimeType},body:bytes});
+  if(!upload.ok)throw new ApiError(502,`Gemini recording upload failed (HTTP ${upload.status})`);
+  const result=await upload.json() as any;
+  const file=result.file;
+  if(!file?.uri || !/^files\/[a-zA-Z0-9_-]+$/.test(file.name || ''))throw new ApiError(502,'Gemini returned no uploaded audio file');
+  return file as {name:string;uri:string};
+}
 async function route(path: string, body: any, env: Env, start: number): Promise<any> {
   if (path === '/api/voice-lab/openai-live') {
     const sdp = requiredText(body.sdp,'SDP offer',65536);
@@ -180,10 +195,16 @@ async function route(path: string, body: any, env: Env, start: number): Promise<
     // MediaRecorder uses audio/mp4; Gemini's documented audio MIME is audio/m4a.
     const mimeType = recordedType === 'audio/mp4' ? 'audio/m4a' : recordedType;
     if (!['audio/webm','audio/ogg','audio/m4a','audio/wav','audio/mpeg','audio/mp3'].includes(mimeType)) throw new ApiError(400,'Unsupported recording format');
-    const response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+    const file=await uploadTranscriptionAudio(env,body.audioBase64,mimeType);
+    let response:Response;
+    try {response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
       method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':requireKey(env.GEMINI_API_KEY,'GEMINI_API_KEY')},
-      body:JSON.stringify({model:'gemini-3.5-transcribe',input:[{type:'audio',data:body.audioBase64,mime_type:mimeType}],generation_config:{transcription_config:{language_codes:['he-IL']}}}),
+      body:JSON.stringify({model:'gemini-3.5-transcribe',input:[{type:'audio',uri:file.uri,mime_type:mimeType}],generation_config:{transcription_config:{language_codes:['he-IL']}}}),
     });
+    } finally {
+      // Temporary provider upload is removed on success, rejection and network failure.
+      await fetch('https://generativelanguage.googleapis.com/v1beta/'+file.name,{method:'DELETE',headers:{'x-goog-api-key':requireKey(env.GEMINI_API_KEY,'GEMINI_API_KEY')}}).catch(()=>undefined);
+    }
     if (!response.ok) {
       const failure = await response.json().catch(()=>null) as any;
       // Classify upstream messages, never echo request data, URLs or credentials.
@@ -192,11 +213,12 @@ async function route(path: string, body: any, env: Env, start: number): Promise<
         ? /mime|format|codec|encoding/.test(detail) ? 'unsupported audio format or encoding'
         : /decode|audio|duration|empty|corrupt/.test(detail) ? 'audio could not be decoded or was empty/too short'
         : /language/.test(detail) ? 'invalid transcription language configuration'
-        : /model/.test(detail) ? 'model rejected this request'
+        : /model.*(not found|not available|not supported|unsupported)|unknown model/.test(detail) ? 'requested transcription model is unavailable or unsupported for this API'
+        : /inline|uri|file/.test(detail) ? 'provider rejected the audio file reference'
         : 'invalid transcription request'
         : response.status === 401 || response.status === 403 ? 'authentication or permission denied'
         : response.status === 429 ? 'quota or rate limit exceeded' : 'provider request failed';
-      throw new ApiError(502,`Gemini transcription: ${reason} (HTTP ${response.status}, format ${mimeType}). Try a fresh recording of at least 3 seconds. No fallback was used.`);
+      throw new ApiError(502,`Gemini transcription: ${reason} (HTTP ${response.status}, format ${mimeType}). No fallback was used.`);
     }
     const result = await response.json() as any;
     // output_text is an SDK convenience field, not guaranteed in REST responses.

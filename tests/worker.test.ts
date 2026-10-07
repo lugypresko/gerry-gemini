@@ -2,10 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker, { pcmToWav, providerFailure, type Env } from '../worker/index';
 const env:Env={ASSETS:{fetch:async()=>new Response('assets')}};
-const call=(path:string, body:any={}, bindings:Partial<Env>={})=>worker.fetch(new Request('http://localhost'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),{...env,...bindings});
+const call=async(path:string, body:any={}, bindings:Partial<Env>={})=>{
+ const upstream=globalThis.fetch;
+ if(path==='/api/gemini/transcribe' && bindings.GEMINI_API_KEY)globalThis.fetch=async(input,init)=>{
+  const url=String(input);
+  if(url==='https://generativelanguage.googleapis.com/upload/v1beta/files')return new Response('',{headers:{'x-goog-upload-url':'https://generativelanguage.googleapis.com/upload/fixture'}});
+  if(url==='https://generativelanguage.googleapis.com/upload/fixture')return Response.json({file:{name:'files/fixture',uri:'https://generativelanguage.googleapis.com/v1beta/files/fixture'}});
+  if(url.endsWith('/files/fixture') && init?.method==='DELETE')return new Response('');
+  return upstream(input,init);
+ };
+ try{return await worker.fetch(new Request('http://localhost'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),{...env,...bindings});}finally{globalThis.fetch=upstream;}
+};
 test('recording transcription uses Interactions and returns Hebrew text',async()=>{
  const original=globalThis.fetch;
- globalThis.fetch=async(input,init)=>{assert.equal(input,'https://generativelanguage.googleapis.com/v1beta/interactions');const body=JSON.parse(init!.body as string);assert.equal(body.model,'gemini-3.5-transcribe');assert.equal(body.input[0].mime_type,'audio/webm');assert.deepEqual(body.generation_config.transcription_config.language_codes,['he-IL']);return Response.json({output_text:'שלום ג׳רי'});};
+ globalThis.fetch=async(input,init)=>{assert.equal(input,'https://generativelanguage.googleapis.com/v1beta/interactions');const body=JSON.parse(init!.body as string);assert.equal(body.model,'gemini-3.5-transcribe');assert.equal(body.input[0].mime_type,'audio/webm');assert(body.input[0].uri);assert.equal(body.input[0].data,undefined);assert.deepEqual(body.generation_config.transcription_config.language_codes,['he-IL']);return Response.json({output_text:'שלום ג׳רי'});};
  try{const r=await call('/api/gemini/transcribe',{audioBase64:'AAAA',mimeType:'audio/webm;codecs=opus'},{GEMINI_API_KEY:'fixture'});assert.equal(r.status,200);assert.equal((await r.json() as any).transcript,'שלום ג׳רי');}finally{globalThis.fetch=original;}
 });
 test('Gemini streaming forwards separate PCM chunks and completion',async()=>{
@@ -86,4 +96,16 @@ test('MP4 microphone recordings use Gemini M4A MIME and safe 400 diagnostics',as
  const original=globalThis.fetch;
  globalThis.fetch=async(_input,init)=>{assert.equal(JSON.parse(init!.body as string).input[0].mime_type,'audio/m4a');return Response.json({error:{message:'Unsupported audio format secret-key https://private'}},{status:400});};
  try{const r=await call('/api/gemini/transcribe',{audioBase64:'AAAA',mimeType:'audio/mp4;codecs=mp4a.40.2'},{GEMINI_API_KEY:'fixture'});const data=await r.json() as any;assert.equal(r.status,502);assert.match(data.error,/unsupported audio format/);assert(!data.error.includes('secret-key'));assert(!data.error.includes('https://'));assert(!data.error.includes('billing'));}finally{globalThis.fetch=original;}
+});
+
+test('transcription upload sends binary audio and cleans up rejected requests',async()=>{
+ const original=globalThis.fetch;const commands:string[]=[];
+ globalThis.fetch=async(input,init)=>{
+  const url=String(input);commands.push(init?.method+' '+url);
+  if(url.endsWith('/upload/v1beta/files')){assert.equal((init!.headers as any)['X-Goog-Upload-Header-Content-Type'],'audio/webm');return new Response('',{headers:{'x-goog-upload-url':'https://generativelanguage.googleapis.com/upload/session'}});}
+  if(url.endsWith('/upload/session')){assert.deepEqual(Buffer.from(init!.body as Uint8Array),Buffer.from([1,2,3]));return Response.json({file:{name:'files/testaudio',uri:'https://generativelanguage.googleapis.com/v1beta/files/testaudio'}});}
+  if(url.endsWith('/interactions')){const body=JSON.parse(init!.body as string);assert.equal(body.input[0].data,undefined);assert(body.input[0].uri.endsWith('/files/testaudio'));return Response.json({error:{message:'Model does not support inline data'}},{status:400});}
+  assert.equal(init?.method,'DELETE');assert(url.endsWith('/files/testaudio'));return new Response('');
+ };
+ try{const r=await worker.fetch(new Request('http://localhost/api/gemini/transcribe',{method:'POST',body:JSON.stringify({audioBase64:'AQID',mimeType:'audio/webm'})}),{...env,GEMINI_API_KEY:'fixture'});assert.equal(r.status,502);assert.equal(commands.length,4);assert(commands[3].startsWith('DELETE'));}finally{globalThis.fetch=original;}
 });
