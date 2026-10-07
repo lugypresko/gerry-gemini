@@ -176,13 +176,28 @@ async function route(path: string, body: any, env: Env, start: number): Promise<
   }
   if (path === '/api/gemini/transcribe') {
     requiredText(body.audioBase64,'audioBase64',MAX_BODY);
-    const mimeType = String(body.mimeType || 'audio/webm').split(';')[0];
-    if (!['audio/webm','audio/ogg','audio/mp4','audio/wav','audio/mpeg','audio/mp3'].includes(mimeType)) throw new ApiError(400,'Unsupported recording format');
+    const recordedType = String(body.mimeType || 'audio/webm').split(';')[0].trim().toLowerCase();
+    // MediaRecorder uses audio/mp4; Gemini's documented audio MIME is audio/m4a.
+    const mimeType = recordedType === 'audio/mp4' ? 'audio/m4a' : recordedType;
+    if (!['audio/webm','audio/ogg','audio/m4a','audio/wav','audio/mpeg','audio/mp3'].includes(mimeType)) throw new ApiError(400,'Unsupported recording format');
     const response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
       method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':requireKey(env.GEMINI_API_KEY,'GEMINI_API_KEY')},
       body:JSON.stringify({model:'gemini-3.5-transcribe',input:[{type:'audio',data:body.audioBase64,mime_type:mimeType}],generation_config:{transcription_config:{language_codes:['he-IL']}}}),
     });
-    if (!response.ok) throw new ApiError(502,`Gemini transcription rejected the request (HTTP ${response.status}); check model access, permissions and billing.`);
+    if (!response.ok) {
+      const failure = await response.json().catch(()=>null) as any;
+      // Classify upstream messages, never echo request data, URLs or credentials.
+      const detail = typeof failure?.error?.message === 'string' ? failure.error.message.toLowerCase() : '';
+      const reason = response.status === 400
+        ? /mime|format|codec|encoding/.test(detail) ? 'unsupported audio format or encoding'
+        : /decode|audio|duration|empty|corrupt/.test(detail) ? 'audio could not be decoded or was empty/too short'
+        : /language/.test(detail) ? 'invalid transcription language configuration'
+        : /model/.test(detail) ? 'model rejected this request'
+        : 'invalid transcription request'
+        : response.status === 401 || response.status === 403 ? 'authentication or permission denied'
+        : response.status === 429 ? 'quota or rate limit exceeded' : 'provider request failed';
+      throw new ApiError(502,`Gemini transcription: ${reason} (HTTP ${response.status}, format ${mimeType}). Try a fresh recording of at least 3 seconds. No fallback was used.`);
+    }
     const result = await response.json() as any;
     // output_text is an SDK convenience field, not guaranteed in REST responses.
     // Only take model output after the last user input; never echo input/thoughts.

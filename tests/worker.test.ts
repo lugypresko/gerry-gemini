@@ -81,3 +81,9 @@ test('REST transcription reads model_output steps and never echoes user/thought 
   assert.equal((await call('/api/gemini/transcribe',{audioBase64:'AAAA'},{GEMINI_API_KEY:'fixture'})).status,502);
  }finally{globalThis.fetch=original;}
 });
+
+test('MP4 microphone recordings use Gemini M4A MIME and safe 400 diagnostics',async()=>{
+ const original=globalThis.fetch;
+ globalThis.fetch=async(_input,init)=>{assert.equal(JSON.parse(init!.body as string).input[0].mime_type,'audio/m4a');return Response.json({error:{message:'Unsupported audio format secret-key https://private'}},{status:400});};
+ try{const r=await call('/api/gemini/transcribe',{audioBase64:'AAAA',mimeType:'audio/mp4;codecs=mp4a.40.2'},{GEMINI_API_KEY:'fixture'});const data=await r.json() as any;assert.equal(r.status,502);assert.match(data.error,/unsupported audio format/);assert(!data.error.includes('secret-key'));assert(!data.error.includes('https://'));assert(!data.error.includes('billing'));}finally{globalThis.fetch=original;}
+});
