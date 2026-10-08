@@ -12,7 +12,7 @@ jobs:
         with:
           node-version: '22'
       - name: Install dependencies without modifying lockfiles
-        run: npm install --no-package-lock --ignore-scripts
+        run: npm install --no-package-lock --legacy-peer-deps
       - name: TypeScript check
         run: npm run lint
       - name: STT regression tests
