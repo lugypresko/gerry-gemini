@@ -369,7 +369,15 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
   const handleSendMessage = async (textToSend?: string) => {
     audioController.unlockAudio();
     const text = (textToSend || inputText).trim();
-    if (!text || isLoadingJerry) return;
+    if (isLoadingJerry) return;
+    // Enforce Hebrew at the final chat entry point, including typed text.
+    const hebrewLetters = (text.match(/[\u05d0-\u05ea]/gu) ?? []).length;
+    const latinLetters = (text.match(/[A-Za-z]/g) ?? []).length;
+    if (hebrewLetters < 2 || hebrewLetters < latinLetters * 2) {
+      setInputText('');
+      askGuestToRepeat();
+      return;
+    }
 
     // 1. Add Itay's message to transcript
     const itayMsg: PodcastMessage = {
