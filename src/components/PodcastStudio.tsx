@@ -8,7 +8,6 @@ import { EpisodeChapter, JerryActionPrompt } from '../types/episode';
 import { PodcastMessage } from '../types/podcast';
 import { audioController } from '../utils/audio';
 import { sfxEngine } from '../utils/soundEffects';
-import { hasPredominantlyHebrewText, splitSpeechResults } from '../utils/hebrewTranscription';
 import {
   Mic,
   MicOff,
@@ -85,9 +84,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isJerrySpeaking, isLoadingJerry]);
 
-  const browserSpeechPreviewActiveRef = useRef(false);
-
-  // Setup Web Speech Recognition for live visual preview only (never submit unverified interim text)
+  // Setup Web Speech Recognition for instant zero-latency speech-to-text in Chrome/Edge
   useEffect(() => {
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -99,14 +96,13 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
         recognition.interimResults = true;
 
         recognition.onresult = (event: any) => {
-          if (!browserSpeechPreviewActiveRef.current) return;
-          const { finalText, previewText } = splitSpeechResults(event);
-          if (finalText && hasPredominantlyHebrewText(finalText)) {
-            speechCapturedRef.current = finalText;
-            setInputText(finalText);
-          } else if (previewText) {
-            setInputText(previewText);
+          let currentTranscript = '';
+          for (let i = 0; i < event.results.length; i++) {
+            currentTranscript += event.results[i][0].transcript + ' ';
           }
+          currentTranscript = currentTranscript.trim();
+          speechCapturedRef.current = currentTranscript;
+          setInputText(currentTranscript);
         };
 
         recognition.onerror = (e: any) => {
@@ -120,12 +116,11 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
     }
   }, []);
 
-  // Start mic recording: MediaRecorder + WebSpeech Preview
+  // Start dual mic recording: MediaRecorder + WebSpeech
   const startRecording = async () => {
     setMicError(null);
     speechCapturedRef.current = '';
     audioChunksRef.current = [];
-    browserSpeechPreviewActiveRef.current = true;
     await audioController.unlockAudio();
 
     try {
@@ -171,14 +166,19 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
         setMicAudioLevel(0);
         stream.getTracks().forEach((track) => track.stop());
 
-        // Transcribe recorded audio with authoritative backend Gemini STT
-        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
-        if (audioBlob.size > 800) {
-          await transcribeAudioWithGemini(audioBlob, mimeType);
-        } else if (speechCapturedRef.current && hasPredominantlyHebrewText(speechCapturedRef.current)) {
-          const recognized = speechCapturedRef.current.trim();
+        // Check if browser SpeechRecognition already gave us text
+        const recognized = speechCapturedRef.current.trim();
+        if (recognized.length > 0) {
           setInputText(recognized);
+          // Send immediately for instant conversational feel
           await handleSendMessage(recognized);
+          return;
+        }
+
+        // If WebSpeech gave no text (or wasn't supported), transcribe via Gemini
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        if (audioBlob.size > 1000) {
+          await transcribeAudioWithGemini(audioBlob, mimeType);
         } else {
           setMicError('לא זוהה קול ברור. נסה לדבר קרוב יותר למיקרופון או לבחור משפט מפתח.');
         }
@@ -187,8 +187,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
       mediaRecorderRef.current = recorder;
       recorder.start(200);
       setIsRecordingMic(true);
+      audioController.playChime('record_start');
 
-      // Start WebSpeech preview if available
+      // Start WebSpeech if available
       if (recognitionRef.current) {
         try {
           recognitionRef.current.start();
@@ -197,15 +198,14 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
     } catch (err: any) {
       console.warn('Microphone access failed:', err);
       setIsRecordingMic(false);
-      browserSpeechPreviewActiveRef.current = false;
       setMicError('גישת המיקרופון חסומה בדפדפן. ניתן להקליד את דברי איתי ישירות או להשתמש במשפטי המפתח למטה.');
       sfxEngine.play('record_scratch');
     }
   };
 
   const stopRecording = () => {
-    browserSpeechPreviewActiveRef.current = false;
     setIsRecordingMic(false);
+    audioController.playChime('record_stop');
 
     if (recognitionRef.current) {
       try {
@@ -246,11 +246,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
           const transcript = (data.transcript || '').trim();
 
           setIsTranscribing(false);
-          if (transcript && hasPredominantlyHebrewText(transcript)) {
+          if (transcript) {
             setInputText(transcript);
             await handleSendMessage(transcript);
-          } else if (transcript) {
-            setMicError(`התמלול שהתקבל אינו בעברית ("${transcript}"). אנא דבר בעברית.`);
           } else {
             setMicError('לא זוהה דיבור ברור בהקלטה. נסה לדבר שוב או להקליד.');
           }
