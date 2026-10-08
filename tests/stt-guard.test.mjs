@@ -19,7 +19,7 @@ test('onstop always transcribes recorded audio with Gemini', () => {
 test('Transcription guards against predominantly non-Hebrew output', () => {
   assert.match(source, /hebrewLetters >= 2 && hebrewLetters >= latinLetters \* 2/);
   assert.match(source, /await handleSendMessage\(transcript\)/);
-  assert.match(source, /התמלול אינו אמין בעברית/);
+  assert.match(source, /askGuestToRepeat\(\)/);
 });
 
 test('Late Web Speech results are not displayed after stop', () => {
