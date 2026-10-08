@@ -347,53 +347,45 @@ app.post('/api/gemini/transcribe', async (req: Request, res: Response) => {
       },
     };
 
-    // 1. Try gemini-3.5-transcribe
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.5-transcribe',
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              audioPart,
-              { text: 'תמלל במדויק את המילים בעברית שנאמרו בהקלטה. החזר אך ורק את הטקסט המדויק שנשמע, ללא שום תוספת, הערה או הסבר.' },
-            ],
-          },
-        ],
-      });
+    // 1. Try available transcription and multimodal models with explicit Hebrew script instruction
+    const transcribeInstruction = 'הקשב להקלטת השמע. תמלל במדויק אך ורק באותיות עבריות (אלפבית עברי / Hebrew script בלבד!). חל איסור מוחלט על תעתיק לטיני/אנגלי (למשל: כתוב "היי ג׳רי מה נשמע" ואל תכתוב "Hi Jerry, manish ma"). אם נאמרו מילים בעברית, החזר אך ורק את המילים עצמן ללא שום הסבר, תוספת או הקדמה. אם יש רק שקט, החזר מחרוזת ריקה.';
 
-      const transcript = (response.text || '').trim();
-      if (transcript) {
-        return res.json({ transcript, engineUsed: 'gemini-3.5-transcribe' });
+    const modelsToTry = [
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-1.5-flash',
+      'gemini-3.5-transcribe',
+      'gemini-3.8-flash',
+    ];
+
+    for (const modelName of modelsToTry) {
+      try {
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                audioPart,
+                { text: transcribeInstruction },
+              ],
+            },
+          ],
+          config: {
+            temperature: 0.1,
+          },
+        });
+
+        const transcript = (response.text || '').trim();
+        if (transcript) {
+          return res.json({ transcript, engineUsed: modelName });
+        }
+      } catch (err: any) {
+        console.warn(`Transcription attempt with ${modelName} failed:`, err?.message);
       }
-    } catch (transcribeErr: any) {
-      console.warn('gemini-3.5-transcribe error, falling back to gemini-3.8-flash:', transcribeErr?.message);
     }
 
-    // 2. High-speed multimodal fallback using gemini-3.8-flash
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              audioPart,
-              { text: 'הקשב להקלטת השמע. תמלל במדויק את הדיבור בעברית. אם נאמרו מילים, כתוב אך ורק את המילים עצמן. אם אין דיבור או רק שקט, החזר מחרוזת ריקה.' },
-            ],
-          },
-        ],
-        config: {
-          temperature: 0.2,
-        },
-      });
-
-      const transcript = (response.text || '').trim();
-      return res.json({ transcript, engineUsed: 'gemini-3.8-flash' });
-    } catch (flashErr: any) {
-      console.error('Audio transcription flash fallback failed:', flashErr);
-      return res.status(500).json({ error: 'Could not transcribe audio' });
-    }
+    return res.status(500).json({ error: 'Could not transcribe audio in Hebrew' });
   } catch (error: any) {
     console.error('Audio transcription error:', error);
     res.status(500).json({ error: error.message || 'Transcription failed' });
