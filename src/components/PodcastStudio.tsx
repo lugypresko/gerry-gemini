@@ -171,7 +171,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
         if (audioBlob.size > 1000) {
           await transcribeAudioWithGemini(audioBlob, mimeType);
         } else {
-          setMicError('לא זוהה קול ברור. נסה לדבר קרוב יותר למיקרופון או לבחור משפט מפתח.');
+          setInputText('');
+          askGuestToRepeat();
         }
       };
 
@@ -243,18 +244,34 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
             await handleSendMessage(transcript);
           } else {
             setInputText('');
-            setMicError(transcript ? 'התמלול אינו אמין בעברית. נסה לומר שוב את המשפט.' : 'לא זוהה דיבור ברור בהקלטה. נסה לדבר שוב או להקליד.');
+            askGuestToRepeat();
           }
         } catch (fetchErr) {
           console.error('Transcription fetch error:', fetchErr);
           setIsTranscribing(false);
-          setMicError('התמלול נכשל. נסה שוב או הקלד ידנית.');
+          setInputText('');
+          askGuestToRepeat();
         }
       };
     } catch (err) {
       console.error('File reading error:', err);
       setIsTranscribing(false);
     }
+  };
+
+  // A fixed clarification, not an LLM reply: never send a failed STT result to chat.
+  const askGuestToRepeat = () => {
+    const clarification: PodcastMessage = {
+      id: `jerry-clarify-${Date.now()}`,
+      speaker: 'Jerry',
+      text: 'לא הבנתי, תוכל לחזור על זה?',
+      timestamp: new Date().toLocaleTimeString([], { minute: '2-digit', second: '2-digit' }),
+      emotion: 'neutral',
+      ttsModel,
+    };
+    setJerryEmotion('neutral');
+    setMessages((prev) => [...prev, clarification]);
+    void playSpeakerAudio(clarification);
   };
 
   // Play audio for a message
