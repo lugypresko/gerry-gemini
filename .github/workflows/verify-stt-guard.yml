@@ -1,0 +1,21 @@
+name: Verify isolated STT fix
+on:
+  push:
+    branches: [codex/stt-guarded-one-change]
+  workflow_dispatch:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies without modifying lockfiles
+        run: npm install --no-package-lock --ignore-scripts
+      - name: TypeScript check
+        run: npm run lint
+      - name: STT regression tests
+        run: node --test tests/stt-guard.test.mjs
+      - name: Production build
+        run: npm run build
