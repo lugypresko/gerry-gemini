@@ -2,7 +2,7 @@ name: Build isolated Jerry Cloudflare bundle
 on:
   push:
     branches: [codex/stt-guarded-one-change]
-    paths: ['.github/workflows/build-isolated-bundle.yml']
+    paths: ['.github/workflows/build-isolated-bundle.yml', 'src/components/PodcastStudio.tsx', 'tests/stt-guard.test.mjs']
   workflow_dispatch:
 permissions:
   contents: write
