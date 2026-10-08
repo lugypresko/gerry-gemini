@@ -1,0 +1,74 @@
+name: Build isolated Jerry Cloudflare bundle
+on:
+  push:
+    branches: [codex/stt-guarded-one-change]
+    paths: ['.github/workflows/build-isolated-bundle.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --no-package-lock --legacy-peer-deps
+      - name: Validate TypeScript
+        run: npm run lint
+      - name: Run STT regression tests
+        run: node --test tests/stt-guard.test.mjs
+      - name: Build production UI
+        run: npm run build
+      - name: Generate self-contained Cloudflare Worker
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const files = {};
+          const mime = {'html':'text/html; charset=utf-8','js':'application/javascript; charset=utf-8','css':'text/css; charset=utf-8','svg':'image/svg+xml','png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','ico':'image/x-icon','json':'application/json; charset=utf-8','woff2':'font/woff2','webp':'image/webp'};
+          function walk(dir) {
+            for (const item of fs.readdirSync(dir,{withFileTypes:true})) {
+              const full=path.join(dir,item.name);
+              if(item.isDirectory())walk(full);
+              else {
+                const url='/'+path.relative('dist',full).split(path.sep).join('/');
+                const ext=path.extname(full).slice(1).toLowerCase();
+                files[url]={data:fs.readFileSync(full).toString('base64'),mime:mime[ext]||'application/octet-stream'};
+              }
+            }
+          }
+          walk('dist');
+          if(!files['/index.html']||!Object.keys(files).some(x=>x.endsWith('.js')))throw Error('Missing built UI assets');
+          const script=[
+            '/* Built from Git commit '+process.env.GITHUB_SHA+'; isolated test only. */',
+            'const FILES='+JSON.stringify(files)+';',
+            'export default {async fetch(request,env){',
+            'const url=new URL(request.url);',
+            'if(url.pathname.startsWith("/api/")){',
+            'if(!env.PROD_BACKEND)return new Response("Missing PROD_BACKEND binding",{status:503});',
+            'return env.PROD_BACKEND.fetch(request);',
+            '}',
+            'let item=FILES[url.pathname];',
+            'if(!item && !url.pathname.includes("."))item=FILES["/index.html"];',
+            'if(!item)return new Response("Not found",{status:404});',
+            'const binary=atob(item.data);const bytes=Uint8Array.from(binary,c=>c.charCodeAt(0));',
+            'return new Response(bytes,{headers:{"content-type":item.mime,"cache-control":"no-store","x-jerry-build":"'+process.env.GITHUB_SHA+'"}});',
+            '}}'
+          ].join('\n');
+          fs.mkdirSync('deploy-bundle',{recursive:true});
+          fs.writeFileSync('deploy-bundle/isolated-worker.js',script);
+          fs.writeFileSync('deploy-bundle/BUILD_SHA',process.env.GITHUB_SHA+'\n');
+          console.log('Bundled',Object.keys(files).length,'assets;',script.length,'source bytes');
+          NODE
+      - name: Save bundle to isolated branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add deploy-bundle/isolated-worker.js deploy-bundle/BUILD_SHA
+          git commit -m 'build: publish isolated Jerry worker bundle [skip ci]'
+          git push origin HEAD:codex/stt-guarded-one-change
