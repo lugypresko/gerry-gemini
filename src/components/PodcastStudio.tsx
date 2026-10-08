@@ -77,7 +77,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
   const audioChunksRef = useRef<Blob[]>([]);
   const animFrameRef = useRef<number | null>(null);
   const recognitionRef = useRef<any>(null);
-  const speechCapturedRef = useRef<string>('');
+  const browserPreviewActiveRef = useRef(false);
+
 
   // Auto scroll chat
   useEffect(() => {
@@ -101,8 +102,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
             currentTranscript += event.results[i][0].transcript + ' ';
           }
           currentTranscript = currentTranscript.trim();
-          speechCapturedRef.current = currentTranscript;
-          setInputText(currentTranscript);
+          if (browserPreviewActiveRef.current) setInputText(currentTranscript);
         };
 
         recognition.onerror = (e: any) => {
@@ -119,7 +119,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
   // Start dual mic recording: MediaRecorder + WebSpeech
   const startRecording = async () => {
     setMicError(null);
-    speechCapturedRef.current = '';
+    browserPreviewActiveRef.current = true;
     audioChunksRef.current = [];
     await audioController.unlockAudio();
 
@@ -166,16 +166,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
         setMicAudioLevel(0);
         stream.getTracks().forEach((track) => track.stop());
 
-        // Check if browser SpeechRecognition already gave us text
-        const recognized = speechCapturedRef.current.trim();
-        if (recognized.length > 0) {
-          setInputText(recognized);
-          // Send immediately for instant conversational feel
-          await handleSendMessage(recognized);
-          return;
-        }
-
-        // If WebSpeech gave no text (or wasn't supported), transcribe via Gemini
+        // Browser recognition is preview only. Gemini transcribes the recorded audio.
         const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
         if (audioBlob.size > 1000) {
           await transcribeAudioWithGemini(audioBlob, mimeType);
@@ -187,7 +178,6 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
       mediaRecorderRef.current = recorder;
       recorder.start(200);
       setIsRecordingMic(true);
-      audioController.playChime('record_start');
 
       // Start WebSpeech if available
       if (recognitionRef.current) {
@@ -205,7 +195,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
 
   const stopRecording = () => {
     setIsRecordingMic(false);
-    audioController.playChime('record_stop');
+    browserPreviewActiveRef.current = false;
 
     if (recognitionRef.current) {
       try {
@@ -246,11 +236,14 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
           const transcript = (data.transcript || '').trim();
 
           setIsTranscribing(false);
-          if (transcript) {
+          const hebrewLetters = (transcript.match(/[\u05d0-\u05ea]/gu) ?? []).length;
+          const latinLetters = (transcript.match(/[A-Za-z]/g) ?? []).length;
+          if (hebrewLetters >= 2 && hebrewLetters >= latinLetters * 2) {
             setInputText(transcript);
             await handleSendMessage(transcript);
           } else {
-            setMicError('לא זוהה דיבור ברור בהקלטה. נסה לדבר שוב או להקליד.');
+            setInputText('');
+            setMicError(transcript ? 'התמלול אינו אמין בעברית. נסה לומר שוב את המשפט.' : 'לא זוהה דיבור ברור בהקלטה. נסה לדבר שוב או להקליד.');
           }
         } catch (fetchErr) {
           console.error('Transcription fetch error:', fetchErr);
@@ -371,7 +364,6 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
 
     setMessages((prev) => [...prev, itayMsg]);
     setInputText('');
-    speechCapturedRef.current = '';
     setIsLoadingJerry(true);
 
     // 2. Play Itay's speech briefly without blocking Jerry's API request!
