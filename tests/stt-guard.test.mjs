@@ -41,3 +41,11 @@ test('Bad STT does not call Gemini chat and speaks a fixed clarification', () =>
   assert.match(clarification, /void playSpeakerAudio\(clarification\)/);
   assert.doesNotMatch(clarification, /generateJerryReply|handleSendMessage|\/api\/gemini\/chat/);
 });
+
+test('Every conversation entry blocks foreign script before chat generation', () => {
+  const handler = source.split('const handleSendMessage = async')[1]?.split('const generateJerryReply = async')[0] ?? '';
+  assert.match(handler, /hebrewLetters < 2 \|\| hebrewLetters < latinLetters \* 2/);
+  assert.match(handler, /askGuestToRepeat\(\);\s*return;/);
+  assert.match(handler, /await generateJerryReply\(text\)/);
+  assert.ok(handler.indexOf('askGuestToRepeat();') < handler.indexOf('await generateJerryReply(text)'));
+});
