@@ -30,3 +30,14 @@ test('No recording chimes', () => {
   assert.doesNotMatch(source, /playChime\('record_start'\)/);
   assert.doesNotMatch(source, /playChime\('record_stop'\)/);
 });
+
+test('Bad STT does not call Gemini chat and speaks a fixed clarification', () => {
+  const transcribe = source.split('const transcribeAudioWithGemini = async')[1]?.split('// A fixed clarification')[0] ?? '';
+  assert.match(transcribe, /if \(hebrewLetters >= 2 && hebrewLetters >= latinLetters \* 2\)/);
+  assert.match(transcribe, /await handleSendMessage\(transcript\)/);
+  assert.match(transcribe, /setInputText\(''\);\s*askGuestToRepeat\(\)/);
+  const clarification = source.split('const askGuestToRepeat = () => {')[1]?.split('// Play audio for a message')[0] ?? '';
+  assert.match(clarification, /לא הבנתי, תוכל לחזור על זה\?/);
+  assert.match(clarification, /void playSpeakerAudio\(clarification\)/);
+  assert.doesNotMatch(clarification, /generateJerryReply|handleSendMessage|\/api\/gemini\/chat/);
+});
