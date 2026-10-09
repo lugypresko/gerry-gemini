@@ -70,6 +70,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
   const [micAudioLevel, setMicAudioLevel] = useState(0);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
+  const [retryRecording, setRetryRecording] = useState<{ blob: Blob; mimeType: string } | null>(null);
   const [alternateAudioLoading, setAlternateAudioLoading] = useState<string | null>(null);
 
   const chatBottomRef = useRef<HTMLDivElement>(null);
@@ -222,39 +223,49 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
     setIsTranscribing(true);
     setMicError(null);
 
+    setRetryRecording({ blob, mimeType });
     try {
-      const reader = new FileReader();
-      reader.readAsDataURL(blob);
-      reader.onloadend = async () => {
-        const base64Audio = (reader.result as string).split(',')[1];
-        try {
-          const res = await fetch('/api/gemini/transcribe', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ audioBase64: base64Audio, mimeType }),
-          });
-          const data = await res.json();
-          const transcript = (data.transcript || '').trim();
-
-          setIsTranscribing(false);
-          const hebrewLetters = (transcript.match(/[\u05d0-\u05ea]/gu) ?? []).length;
-          const latinLetters = (transcript.match(/[A-Za-z]/g) ?? []).length;
-          if (hebrewLetters >= 2 && hebrewLetters >= latinLetters * 2) {
-            setInputText(transcript);
-            await handleSendMessage(transcript);
-          } else {
-            setInputText('');
-            askGuestToRepeat();
-          }
-        } catch (fetchErr) {
-          console.error('Transcription fetch error:', fetchErr);
-          setIsTranscribing(false);
-          setInputText('');
-          askGuestToRepeat();
-        }
-      };
+      const base64Audio = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('לא ניתן לקרוא את ההקלטה'));
+        reader.onload = () => resolve(String(reader.result).split(',')[1]);
+        reader.readAsDataURL(blob);
+      });
+      const res = await fetch('/api/gemini/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audioBase64: base64Audio, mimeType }),
+      });
+      const responseText = await res.text();
+      let data: { transcript?: unknown; error?: unknown };
+      try { data = JSON.parse(responseText); }
+      catch { throw new Error(`HTTP ${res.status}: שרת התמלול החזיר תגובה שאינה JSON`); }
+      if (!res.ok) {
+        const message = typeof data.error === 'string' ? data.error : 'שגיאת שרת תמלול';
+        throw new Error(`HTTP ${res.status}: ${message}`);
+      }
+      if (typeof data.transcript !== 'string') {
+        throw new Error(`HTTP ${res.status}: תגובה לא תקינה — חסר שדה transcript`);
+      }
+      const transcript = data.transcript.trim();
+      setInputText('');
+      if (!transcript) {
+        setMicError(`HTTP ${res.status}: התקבל תמלול ריק. ההקלטה זמינה לניסיון חוזר.`);
+        return;
+      }
+      const hebrewLetters = (transcript.match(/[\u05d0-\u05ea]/gu) ?? []).length;
+      const latinLetters = (transcript.match(/[A-Za-z]/g) ?? []).length;
+      if (hebrewLetters >= 2 && hebrewLetters >= latinLetters * 2) {
+        setInputText(transcript);
+        await handleSendMessage(transcript);
+        setRetryRecording(null);
+      } else {
+        setMicError(`HTTP ${res.status}: התמלול התקבל אך כלל השפה דחה אותו. ההקלטה זמינה לניסיון חוזר.`);
+      }
     } catch (err) {
-      console.error('File reading error:', err);
+      setInputText('');
+      setMicError(`התמלול נכשל: ${err instanceof Error ? err.message : 'כשל רשת'}. ההקלטה נשמרה בזיכרון עד רענון הדף.`);
+    } finally {
       setIsTranscribing(false);
     }
   };
@@ -835,6 +846,22 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
             >
               הבנתי
             </button>
+          </div>
+        )}
+
+        {retryRecording && (
+          <div className="mb-3 flex gap-3 text-xs">
+            <button disabled={isTranscribing || isRecordingMic} onClick={() => void transcribeAudioWithGemini(retryRecording.blob, retryRecording.mimeType)} className="text-amber-300 underline disabled:opacity-50">
+              נסה לתמלל שוב את אותה הקלטה
+            </button>
+            <button onClick={() => {
+              const url = URL.createObjectURL(retryRecording.blob);
+              const link = document.createElement('a');
+              link.href = url;
+              link.download = retryRecording.mimeType.includes('mp4') ? 'jerry-recording.mp4' : 'jerry-recording.webm';
+              link.click();
+              setTimeout(() => URL.revokeObjectURL(url), 1000);
+            }} className="text-slate-300 underline">הורד הקלטה</button>
           </div>
         )}
 
