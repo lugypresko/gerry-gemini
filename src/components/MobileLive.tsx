@@ -1,6 +1,7 @@
 import React, {useEffect, useRef, useState} from 'react';
 import {GoogleGenAI, Modality} from '@google/genai';
 import {DEFAULT_JERRY_SYSTEM_PROMPT} from '../constants/prompts';
+const LIVE_HEBREW_PROMPT = `OUTPUT LANGUAGE: HEBREW (he-IL). RESPOND ONLY IN SPOKEN ISRAELI HEBREW. NEVER RESPOND IN SPANISH OR ANOTHER LANGUAGE. English technical terms such as CTO and API do not change the conversation language. If audio is unclear, ask in Hebrew: לא שמעתי טוב, תוכל לחזור?\n${DEFAULT_JERRY_SYSTEM_PROMPT}\nכל תשובה קולית וכל תמלול תשובה שלך יהיו בעברית בלבד.`;
 export function MobileLive() {
  const [status,setStatus]=useState('לא מחובר'),[error,setError]=useState(''),[lines,setLines]=useState<string[]>([]),[metrics,setMetrics]=useState<Record<string,number>>({});
  const session=useRef<any>(null),stream=useRef<MediaStream|null>(null),input=useRef<AudioContext|null>(null),output=useRef<AudioContext|null>(null),nodes=useRef<AudioBufferSourceNode[]>([]),next=useRef(0),generation=useRef(0);
@@ -14,9 +15,9 @@ export function MobileLive() {
   // Resume both contexts in the user gesture before network or microphone awaits.
   const out=new AudioContext({sampleRate:24000}),inc=new AudioContext({sampleRate:16000});output.current=out;input.current=inc;await Promise.all([out.resume(),inc.resume()]);
   const mic=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});if(run!==generation.current){mic.getTracks().forEach(t=>t.stop());return;}stream.current=mic;
-  const response=await fetch('/api/voice-lab/live-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({systemPrompt:DEFAULT_JERRY_SYSTEM_PROMPT})});const token=await response.json();if(!response.ok||!token.token)throw Error(`HTTP ${response.status}: ${token.error||'לא התקבל טוקן'}`);if(run!==generation.current)return;
+  const response=await fetch('/api/voice-lab/live-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({systemPrompt:LIVE_HEBREW_PROMPT})});const token=await response.json();if(!response.ok||!token.token)throw Error(`HTTP ${response.status}: ${token.error||'לא התקבל טוקן'}`);if(run!==generation.current)return;
   const ai=new GoogleGenAI({apiKey:token.token,httpOptions:{apiVersion:'v1alpha'}});
-  const live=await ai.live.connect({model:token.model,config:{responseModalities:[Modality.AUDIO],systemInstruction:DEFAULT_JERRY_SYSTEM_PROMPT,inputAudioTranscription:{},outputAudioTranscription:{}},callbacks:{
+  const live=await ai.live.connect({model:token.model,config:{responseModalities:[Modality.AUDIO],systemInstruction:LIVE_HEBREW_PROMPT,inputAudioTranscription:{},outputAudioTranscription:{}},callbacks:{
    onmessage:(m:any)=>{if(run!==generation.current)return;const c=m.serverContent;if(!c)return;const t=timing.current;
     if(c.interrupted){stopAudio();t.firstAudio=0;setLines(x=>[...x,'מערכת: התשובה נקטעה']);}
     if(c.inputTranscription?.text){if(!t.firstTranscript)t.firstTranscript=performance.now();setLines(x=>[...x,'איתי: '+c.inputTranscription.text]);}
@@ -37,5 +38,5 @@ export function MobileLive() {
  }catch(e){if(run!==generation.current)return;setError(e instanceof Error?e.message:'החיבור נכשל');cleanup();setStatus('שגיאה');}
  };
  const labels:Record<string,string>={connect:'התחברות כולל הרשאת מיקרופון',speechEndEstimateToChunk:'סוף דיבור משוער עד מנת אודיו',speechEndEstimateToScheduled:'סוף דיבור משוער עד ניגון מתוזמן',firstTranscriptToChunk:'תמלול ראשון עד מנת אודיו'};
- return <section dir="rtl" className="space-y-4 p-4 rounded-2xl bg-slate-900"><h2 className="text-xl font-bold">ג׳רי · Mobile Live Experiment v0.1</h2><p>דיבור רציף עם Gemini Live. אפשר להיכנס לדברי ג׳רי.</p><button disabled={status==='מתחבר'||status==='מחובר'} onClick={()=>void start()} className="p-3 bg-emerald-600 rounded">התחל שיחה</button><button onClick={()=>{cleanup();setStatus('לא מחובר');}} className="p-3 bg-rose-700 rounded mr-3">סיים שיחה</button><p>{status}</p>{error&&<p role="alert">{error}</p>}<div>{Object.entries(metrics).map(([key,value])=><p key={key}>{labels[key]}: {value}ms</p>)}</div><p className="text-xs">סוף הדיבור הוא אומדן VAD מקומי (RMS 0.02, שקט 300ms). ניגון מתוזמן אינו מדידה אקוסטית. אין כאן הקלטה או העלאת קובץ תמלול.</p><div>{lines.slice(-40).map((line,i)=><p key={i} className="p-2 border-b border-slate-700">{line}</p>)}</div></section>;
+ return <section dir="rtl" className="space-y-4 p-4 rounded-2xl bg-slate-900"><h2 className="text-xl font-bold">ג׳רי · Mobile Live Experiment v0.2</h2><p>דיבור רציף עם Gemini Live. אפשר להיכנס לדברי ג׳רי.</p><button disabled={status==='מתחבר'||status==='מחובר'} onClick={()=>void start()} className="p-3 bg-emerald-600 rounded">התחל שיחה</button><button onClick={()=>{cleanup();setStatus('לא מחובר');}} className="p-3 bg-rose-700 rounded mr-3">סיים שיחה</button><p>{status}</p>{error&&<p role="alert">{error}</p>}<div>{Object.entries(metrics).map(([key,value])=><p key={key}>{labels[key]}: {value}ms</p>)}</div><p className="text-xs">סוף הדיבור הוא אומדן VAD מקומי (RMS 0.02, שקט 300ms). ניגון מתוזמן אינו מדידה אקוסטית. אין כאן הקלטה או העלאת קובץ תמלול.</p><div>{lines.slice(-40).map((line,i)=><p key={i} className="p-2 border-b border-slate-700">{line}</p>)}</div></section>;
 }
