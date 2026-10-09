@@ -73,6 +73,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
   const [retryRecording, setRetryRecording] = useState<{ blob: Blob; mimeType: string } | null>(null);
   const [alternateAudioLoading, setAlternateAudioLoading] = useState<string | null>(null);
 
+  const [voiceTiming, setVoiceTiming] = useState<{ sttMs?: number; replyMs?: number; playbackRequestMs?: number } | null>(null);
+  const recordingStopAtRef = useRef<number | null>(null);
+  const sttDoneAtRef = useRef<number | null>(null);
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -196,6 +199,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
   };
 
   const stopRecording = () => {
+    recordingStopAtRef.current = performance.now();
+    setVoiceTiming({});
     setIsRecordingMic(false);
     browserPreviewActiveRef.current = false;
 
@@ -224,6 +229,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
     setMicError(null);
 
     setRetryRecording({ blob, mimeType });
+    const sttStart = performance.now();
     try {
       const base64Audio = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -248,6 +254,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
         throw new Error(`HTTP ${res.status}: תגובה לא תקינה — חסר שדה transcript`);
       }
       const transcript = data.transcript.trim();
+      sttDoneAtRef.current = performance.now();
+      setVoiceTiming({ sttMs: Math.round(performance.now() - sttStart) });
       setInputText('');
       if (!transcript) {
         setMicError(`HTTP ${res.status}: התקבל תמלול ריק. ההקלטה זמינה לניסיון חוזר.`);
@@ -425,6 +433,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
       });
 
       const data = await response.json();
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${data.error || 'יצירת התשובה נכשלה'}`);
+      if (sttDoneAtRef.current !== null) setVoiceTiming(prev => ({ ...prev, replyMs: Math.round(performance.now() - sttDoneAtRef.current!) }));
       const replyText = data.reply || 'אה, וואלה? תסביר לי עוד קצת, אני איתך!';
       const audioBase64 = data.audioBase64 || '';
       const usedTtsModel = data.ttsModel || ttsModel;
@@ -464,9 +474,14 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
 
       setMessages((prev) => [...prev, jerryMsg]);
       setIsItaySpeaking(false);
+      if (recordingStopAtRef.current !== null) setVoiceTiming(prev => ({ ...prev, playbackRequestMs: Math.round(performance.now() - recordingStopAtRef.current!) }));
+      recordingStopAtRef.current = null;
+      sttDoneAtRef.current = null;
       playSpeakerAudio(jerryMsg);
     } catch (e) {
-      console.error('Failed to get Jerry reply:', e);
+      setMicError(e instanceof Error ? e.message : 'יצירת התשובה נכשלה');
+      recordingStopAtRef.current = null;
+      sttDoneAtRef.current = null;
     } finally {
       setIsLoadingJerry(false);
     }
@@ -908,6 +923,14 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({
           </button>
         </div>
 
+        <div className="mt-3 text-xs text-slate-400">
+          Mobile Voice v1.1 · בסיס חזרה: mobile-voice-pass-v1
+          {voiceTiming && <div dir="rtl">
+            בקשת תמלול: {voiceTiming.sttMs ?? '—'}ms · תמלול עד תגובה: {voiceTiming.replyMs ?? '—'}ms · עצירת הקלטה עד בקשת ניגון: {voiceTiming.playbackRequestMs ?? '—'}ms
+            <p>עצירת ההקלטה היא לחיצה ידנית, לא זיהוי סוף דיבור. בקשת ניגון אינה אישור שהקול נשמע.</p>
+          </div>}
+          <button onClick={() => { audioController.stop(); setIsJerrySpeaking(false); setIsItaySpeaking(false); }} className="underline text-amber-300">עצור ניגון</button>
+        </div>
         {/* Generation Speed Tracker Footer */}
         {lastGenStats && (
           <div className="mt-3 flex items-center justify-between text-[11px] text-slate-400 border-t border-slate-800/60 pt-2 px-1">
