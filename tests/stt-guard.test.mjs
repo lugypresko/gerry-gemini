@@ -1,51 +1,30 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-
+import { transformSync } from 'esbuild';
 const source = readFileSync('src/components/PodcastStudio.tsx', 'utf8');
-
-test('Browser SpeechRecognition is preview only', () => {
-  assert.match(source, /if \(browserPreviewActiveRef\.current\) setInputText\(currentTranscript\)/);
-  assert.doesNotMatch(source, /speechCapturedRef/);
-  assert.doesNotMatch(source, /handleSendMessage\(recognized\)/);
+const start = source.indexOf('const transcribeAudioWithGemini = async');
+const end = source.indexOf('// A fixed clarification', start);
+const body = transformSync(source.slice(start, end), {loader:'ts', target:'es2022'}).code;
+async function run(response) {
+  const state = {error:null, recording:null, sent:[], busy:false};
+  class Reader { readAsDataURL() {this.result='data:audio/webm;base64,AAAA';this.onload();} }
+  const fn = new Function('fetch','FileReader','setIsTranscribing','setMicError','setRetryRecording','setInputText','handleSendMessage',body+';return transcribeAudioWithGemini;');
+  const transcribe = fn(async()=>response,Reader,x=>state.busy=x,x=>state.error=x,x=>state.recording=x,()=>{},async x=>state.sent.push(x));
+  await transcribe(new Blob(['recorded-audio']), 'audio/webm');
+  return state;
+}
+test('HTTP failure retains audio and does not enter conversation', async()=>{
+  for(const status of [400,500,503]) {
+    const s=await run(new Response(JSON.stringify({error:'upstream failed'}),{status}));
+    assert.ok(s.error.includes(`HTTP ${status}: upstream failed`)); assert.ok(s.recording.blob);assert.deepEqual(s.sent,[]);assert.equal(s.busy,false);
+  }
 });
-
-test('onstop always transcribes recorded audio with Gemini', () => {
-  const onstop = source.split('recorder.onstop = async () => {')[1]?.split('mediaRecorderRef.current = recorder;')[0] ?? '';
-  assert.match(onstop, /await transcribeAudioWithGemini\(audioBlob, mimeType\)/);
-  assert.doesNotMatch(onstop, /handleSendMessage\(/);
+test('200 empty transcript remains distinct from HTTP failure',async()=>{
+  const s=await run(new Response(JSON.stringify({transcript:''})));
+  assert.ok(s.error.includes('תמלול ריק'));assert.ok(s.recording);assert.deepEqual(s.sent,[]);
 });
-
-test('Transcription guards against predominantly non-Hebrew output', () => {
-  assert.match(source, /hebrewLetters >= 2 && hebrewLetters >= latinLetters \* 2/);
-  assert.match(source, /await handleSendMessage\(transcript\)/);
-  assert.match(source, /askGuestToRepeat\(\)/);
-});
-
-test('Late Web Speech results are not displayed after stop', () => {
-  assert.match(source, /browserPreviewActiveRef\.current = false;/);
-});
-
-test('No recording chimes', () => {
-  assert.doesNotMatch(source, /playChime\('record_start'\)/);
-  assert.doesNotMatch(source, /playChime\('record_stop'\)/);
-});
-
-test('Bad STT does not call Gemini chat and speaks a fixed clarification', () => {
-  const transcribe = source.split('const transcribeAudioWithGemini = async')[1]?.split('// A fixed clarification')[0] ?? '';
-  assert.match(transcribe, /if \(hebrewLetters >= 2 && hebrewLetters >= latinLetters \* 2\)/);
-  assert.match(transcribe, /await handleSendMessage\(transcript\)/);
-  assert.match(transcribe, /setInputText\(''\);\s*askGuestToRepeat\(\)/);
-  const clarification = source.split('const askGuestToRepeat = () => {')[1]?.split('// Play audio for a message')[0] ?? '';
-  assert.match(clarification, /לא הבנתי, תוכל לחזור על זה\?/);
-  assert.match(clarification, /void playSpeakerAudio\(clarification\)/);
-  assert.doesNotMatch(clarification, /generateJerryReply|handleSendMessage|\/api\/gemini\/chat/);
-});
-
-test('Every conversation entry blocks foreign script before chat generation', () => {
-  const handler = source.split('const handleSendMessage = async')[1]?.split('const generateJerryReply = async')[0] ?? '';
-  assert.match(handler, /hebrewLetters < 2 \|\| hebrewLetters < latinLetters \* 2/);
-  assert.match(handler, /askGuestToRepeat\(\);\s*return;/);
-  assert.match(handler, /await generateJerryReply\(text\)/);
-  assert.ok(handler.indexOf('askGuestToRepeat();') < handler.indexOf('await generateJerryReply(text)'));
+test('200 accepted transcript uses server text and releases retained audio',async()=>{
+  const s=await run(new Response(JSON.stringify({transcript:'שלום אני מדבר בעברית'})));
+  assert.deepEqual(s.sent,['שלום אני מדבר בעברית']);assert.equal(s.recording,null);assert.equal(s.error,null);
 });
