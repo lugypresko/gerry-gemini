@@ -15,7 +15,7 @@ export function MobileLive() {
   const out=new AudioContext({sampleRate:24000}),inc=new AudioContext({sampleRate:16000});output.current=out;input.current=inc;await Promise.all([out.resume(),inc.resume()]);
   const mic=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});if(run!==generation.current){mic.getTracks().forEach(t=>t.stop());return;}stream.current=mic;
   const response=await fetch('/api/voice-lab/live-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({systemPrompt:DEFAULT_JERRY_SYSTEM_PROMPT})});const token=await response.json();if(!response.ok||!token.token)throw Error(`HTTP ${response.status}: ${token.error||'לא התקבל טוקן'}`);if(run!==generation.current)return;
-  const ai=new GoogleGenAI({apiKey:token.token,httpOptions:{apiVersion:'v1beta'}});
+  const ai=new GoogleGenAI({apiKey:token.token,httpOptions:{apiVersion:'v1alpha'}});
   const live=await ai.live.connect({model:token.model,config:{responseModalities:[Modality.AUDIO],systemInstruction:DEFAULT_JERRY_SYSTEM_PROMPT,inputAudioTranscription:{},outputAudioTranscription:{}},callbacks:{
    onmessage:(m:any)=>{if(run!==generation.current)return;const c=m.serverContent;if(!c)return;const t=timing.current;
     if(c.interrupted){stopAudio();t.firstAudio=0;setLines(x=>[...x,'מערכת: התשובה נקטעה']);}
