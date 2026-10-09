@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { MobileLive } from './components/MobileLive';
 import { PodcastStudio } from './components/PodcastStudio';
 import { ExperimentLab } from './components/ExperimentLab';
 import { BlindTestLab } from './components/BlindTestLab';
@@ -56,6 +57,7 @@ export default function App() {
     );
   };
 
+  if (new URLSearchParams(window.location.search).get('live') === '1') return <MobileLive />;
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-['Assistant',sans-serif] selection:bg-amber-500 selection:text-slate-950" dir="rtl">
       
