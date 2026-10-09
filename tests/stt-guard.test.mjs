@@ -9,8 +9,8 @@ const body = transformSync(source.slice(start, end), {loader:'ts', target:'es202
 async function run(response) {
   const state = {error:null, recording:null, sent:[], busy:false};
   class Reader { readAsDataURL() {this.result='data:audio/webm;base64,AAAA';this.onload();} }
-  const fn = new Function('fetch','FileReader','setIsTranscribing','setMicError','setRetryRecording','setInputText','handleSendMessage',body+';return transcribeAudioWithGemini;');
-  const transcribe = fn(async()=>response,Reader,x=>state.busy=x,x=>state.error=x,x=>state.recording=x,()=>{},async x=>state.sent.push(x));
+  const fn = new Function('fetch','FileReader','setIsTranscribing','setMicError','setRetryRecording','setInputText','handleSendMessage','sttDoneAtRef','setVoiceTiming',body+';return transcribeAudioWithGemini;');
+  const transcribe = fn(async()=>response,Reader,x=>state.busy=x,x=>state.error=x,x=>state.recording=x,()=>{},async x=>state.sent.push(x),{current:null},()=>{});
   await transcribe(new Blob(['recorded-audio']), 'audio/webm');
   return state;
 }
